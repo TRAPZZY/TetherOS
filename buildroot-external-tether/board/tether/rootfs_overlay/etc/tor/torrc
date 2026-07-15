@@ -1,0 +1,7 @@
+SOCKSPort 9050
+ControlPort 9051
+DataDirectory /var/lib/tor
+User root
+Log notice file /var/log/tor/notices.log
+Log warn syslog
+AvoidDiskWrites 1

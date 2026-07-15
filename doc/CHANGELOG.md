@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.1.0 (2026-07-15)
+
+### Buildroot Linux Distribution
+
+- **Bootable ISO** — Full Linux distribution built with Buildroot 2024.02.3, boots from 27MB ISOLINUX ISO via QEMU or USB
+- **Linux kernel 6.1.44** — Custom kernel config with initramfs, e1000 NIC driver, netfilter/NAT/connection tracking
+- **Initramfs boot** — Kernel unpacks `rootfs.cpio.gz` into tmpfs, runs Busybox init, whole OS in RAM
+- **Init scripts** — `rcS` → `S01iptables` (kill switch) → `S02network` (DHCP) → `S03tor` (Tor daemon) → getty login
+- **iptables kill switch** — DROP all non-Tor traffic; allow loopback, Tor ports (443/9001/9030), DNS (53/udp), established connections
+- **Busybox 1.36.1** — Statically compiled system utilities + init
+- **Tor 0.4.8.11** — SOCKS5 proxy on :9050, Control port on :9051, auto-start on boot
+- **Python 3.11.8** — Runtime for the Tether application shell
+- **PySocks** — Installed in rootfs for SOCKS5 proxy support
+- **Buildroot external tree** — `buildroot-external-tether/` with board config, rootfs overlay, kernel fragment, post-build/post-image scripts
+- **Build automation** — `scripts/build-distro.sh` (full) and `scripts/rebuild.sh` (quick rebuild)
+- **Cross-platform** — Build in WSL2 Ubuntu, run anywhere via QEMU or bare metal
+
 ## v1.0.0 (2026-07-14)
 
 ### Initial Release

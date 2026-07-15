@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Tether OS launcher for Linux distribution."""
+import sys, os
+sys.path.insert(0, '/usr/lib/tether-os')
+from app.shell import main
+main()

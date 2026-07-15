@@ -1,0 +1,20 @@
+#!/bin/sh
+# Network setup — bring up Ethernet with DHCP
+case "$1" in
+    start)
+        echo "  [OK] Starting network..."
+        ip link set eth0 up
+        udhcpc -i eth0 -q -n 2>/dev/null
+        ;;
+    stop)
+        echo "  [OK] Stopping network..."
+        ip link set eth0 down
+        ;;
+    restart)
+        $0 stop; sleep 1; $0 start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac

@@ -1,0 +1,21 @@
+#!/bin/sh
+# Tor daemon startup
+case "$1" in
+    start)
+        echo "  [OK] Starting Tor..."
+        mkdir -p /var/log/tor /var/lib/tor
+        chmod 700 /var/lib/tor
+        tor -f /etc/tor/torrc &
+        ;;
+    stop)
+        killall tor 2>/dev/null
+        echo "  [OK] Tor stopped"
+        ;;
+    restart)
+        $0 stop; sleep 1; $0 start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac

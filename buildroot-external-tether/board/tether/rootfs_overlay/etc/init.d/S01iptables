@@ -1,0 +1,41 @@
+#!/bin/sh
+# Network kill switch — block all non-Tor traffic
+case "$1" in
+    start)
+        echo "  [OK] Enabling Tor kill switch..."
+        # Default policies: everything blocked
+        iptables -F
+        iptables -t nat -F
+        iptables -P INPUT DROP
+        iptables -P FORWARD DROP
+        iptables -P OUTPUT DROP
+
+        # Allow loopback
+        iptables -A INPUT -i lo -j ACCEPT
+        iptables -A OUTPUT -o lo -j ACCEPT
+
+        # Tor needs to reach the Tor network (OR port, DirPort)
+        iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+        iptables -A OUTPUT -p tcp --dport 9001 -j ACCEPT
+        iptables -A OUTPUT -p tcp --dport 9030 -j ACCEPT
+
+        # DNS for Tor (it resolves relays)
+        iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+
+        # Allow established/related connections
+        iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        ;;
+    stop)
+        echo "  [WARN] Disabling kill switch"
+        iptables -F
+        iptables -t nat -F
+        iptables -P INPUT ACCEPT
+        iptables -P FORWARD ACCEPT
+        iptables -P OUTPUT ACCEPT
+        ;;
+    *)
+        echo "Usage: $0 {start|stop}"
+        exit 1
+        ;;
+esac

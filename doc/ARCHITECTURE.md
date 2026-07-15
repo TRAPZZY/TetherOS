@@ -1,17 +1,119 @@
 # Tether OS Architecture
 
-**Version:** 1.0.0  
+**Version:** 1.1.0  
 **Author:** Trapzzy  
-**Design Philosophy:** Unix-inspired — do one thing well, compose via pipes.
+**Design Philosophy:** Unix-inspired — do one thing well, compose via pipes. Bootable from ISO, fits entirely in RAM.
 
 ## Overview
 
-Tether OS is a privacy tool and penetration testing shell. It automatically
-rotates your public IP address using the Tor network, provides 90+ built-in
-commands for reconnaissance, exploitation, forensics, and web scanning, and
-delivers a Claude Code-inspired terminal interface.
+Tether OS has two distinct layers:
 
-## Layer Architecture
+1. **Operating System** — Buildroot-based Linux distribution with Busybox, Tor, iptables, Python 3, booting from a 27MB ISOLINUX ISO into initramfs (entirely RAM-based).
+2. **Application Shell** — Pure Python 3.7+ REPL shell with 90+ pentesting commands, Tor IP rotation engine, virtual filesystem, theme engine, and session management.
+
+---
+
+## Operating System Layer
+
+### Boot Sequence
+
+```
+Power-on
+  |
+SeaBIOS
+  |
+ISOLINUX (from ISO)
+  |  Loads bzImage + rootfs.cpio.gz
+  |  Kernel cmdline: console=ttyS0 net.ifnames=0
+  v
+Linux Kernel 6.1.44
+  |  Unpacks initramfs (rootfs.cpio.gz) into tmpfs
+  |  Runs /init (symlink to /sbin/init → Busybox)
+  v
+Busybox init
+  |  Reads /etc/inittab
+  |  ::sysinit:/etc/init.d/rcS
+  v
+rcS (boot script)
+  |  mount -t proc, sysfs, tmpfs, devpts
+  |  mount -o remount,rw /
+  |  mdev -s (populate /dev)
+  |  ip link set lo up
+  |  dmesg -n 1
+  |  echo "Starting services..."
+  v
+for i in /etc/init.d/S*; do $i start; done
+  |
+  +-- S01iptables: Firewall kill switch
+  |     -F, default DROP, allow loopback + Tor ports + DNS + established
+  |
+  +-- S02network: DHCP on eth0
+  |     ip link set eth0 up
+  |     udhcpc -i eth0 -q -n
+  |
+  +-- S03tor: Tor daemon
+  |     tor -f /etc/tor/torrc &
+  |     SOCKS5 proxy on :9050
+  |     Control port on :9051
+  |
+  v
+Getty on ttyS0
+  |
+  v
+Login prompt
+```
+
+### Init Scripts
+
+| Script | Order | Function |
+|--------|-------|----------|
+| `S01iptables` | 1 | Block all non-Tor traffic |
+| `S02network` | 2 | DHCP on eth0 |
+| `S03tor` | 3 | Tor daemon (SOCKS5 + Control) |
+
+### Kernel Configuration
+
+Fragment at `board/tether/kernel.config`:
+
+```
+CONFIG_BLK_DEV_INITRD=y       # Initramfs support
+CONFIG_E1000=y                # Intel PRO/1000 NIC
+CONFIG_E1000E=y               # Intel PRO/1000 PCIe NIC
+CONFIG_NETFILTER=y            # Firewall subsystem
+CONFIG_IP_NF_IPTABLES=y       # iptables
+CONFIG_NF_CONNTRACK=y         # Connection tracking
+CONFIG_NF_NAT=y               # NAT support
+CONFIG_IP_NF_NAT=y            # IPv4 NAT
+CONFIG_IP_NF_TARGET_MASQUERADE=y
+CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y
+CONFIG_NETFILTER_XT_MATCH_STATE=y
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+```
+
+### Buildroot External Tree
+
+```
+buildroot-external-tether/
+  board/tether/
+    rootfs_overlay/           # Files copied on top of default rootfs
+      etc/inittab             # Busybox init config
+      etc/init.d/rcS          # Boot sequence
+      etc/init.d/S01iptables  # Kill switch
+      etc/init.d/S02network   # DHCP
+      etc/init.d/S03tor       # Tor daemon
+      etc/tor/torrc           # Tor configuration
+    kernel.config             # Kernel config fragment
+    post-build.sh             # Post-build: deploy app, install deps, create /init
+    post-image.sh             # Post-image: build ISOLINUX ISO with xorriso
+  configs/
+    tether_os_defconfig       # Saved Buildroot .config
+```
+
+---
+
+## Application Shell Layer
+
+### Layer Architecture
 
 ```
 +-----------------------------------------------------------+
@@ -31,34 +133,29 @@ delivers a Claude Code-inspired terminal interface.
 +-----------------------------------------------------------+
 ```
 
-## Shell Layer
-
 ### app/shell.py — Main REPL
 
 The shell provides a Claude Code-inspired terminal interface with:
 
 - **`>` prompt** — Clean, minimal prompt prefix
-- **Bottom status bar** — Persistent bar showing current IP, rotation count, Tor status, threat level, and active theme
-- **Pipe support** — `command1 | command2` chains commands, passing stdout as arguments
+- **Bottom status bar** — Current IP, rotation count, Tor status, threat level, active theme
+- **Pipe support** — `command1 | command2` chains commands
 - **Redirect support** — `>` write, `>>` append to virtual filesystem
-- **`.th` scripts** — Positional arg substitution (`$1`-`$N`, `$@`), executed line by line
+- **`.th` scripts** — Positional arg substitution (`$1`-`$N`, `$@`)
 - **Session persistence** — `save`/`restore` commands write/read JSON state
-- **Command registry** — 90+ commands loaded from `app/commands/` modules at startup
+- **Command registry** — 90+ commands loaded from `app/commands/` modules
 
 ### app/banner.py — Boot Sequence
 
 Multi-stage animated boot:
-
-1. **splash_screen()** — Full dark screen, centered hacker frame with bold red "TETHER OS", pulsing ">> TARGET ACQUIRED <<" warning, bottom separator
-2. **matrix_rain()** — Classic green digital rain effect (hex character set for Windows cp1252 compatibility)
-3. **TRAP_HUB_LOGO** — Large ASCII art logo in red
-4. **Boot messages** — Anti-forensic module loading with hex addresses (`memory_scraper`, `process_hider`, `log_cleaner`, etc.)
+1. **splash_screen()** — Dark screen, hacker frame, pulsing "TARGET ACQUIRED"
+2. **matrix_rain()** — Green digital rain
+3. **TRAP_HUB_LOGO** — ASCII art logo
+4. **Boot messages** — Anti-forensic module loading
 5. **Tor handshake** — 3-hop relay status, exit node, circuit latency
-6. **type_text()** — Animated "YOUR CONNECTION IS NOW ANONYMIZED" / "YOUR IDENTITY REMAINS HIDDEN"
+6. **type_text()** — "YOUR CONNECTION IS NOW ANONYMIZED"
 
 ### app/theme.py — Theme Engine
-
-Four color presets:
 
 | Theme     | Primary | Accent   | Background |
 |-----------|---------|----------|------------|
@@ -67,22 +164,18 @@ Four color presets:
 | `terminal`| Cyan    | White    | Black       |
 | `hacker`  | Red     | Bright red | Dark red bg|
 
-Persisted to `~/.tether/theme.json`.
-
 ### app/vfs.py — Virtual Filesystem
 
-In-memory Linux-style filesystem with:
-
-- `/proc/` — System info files (cpuinfo, meminfo, uptime, version, net/dev)
+In-memory Linux-style filesystem:
+- `/proc/` — System info (cpuinfo, meminfo, uptime, net/dev)
 - `/etc/` — Configuration (hostname, resolv.conf, passwd, tether.conf)
 - `/home/root/` — User home directory
 - `/tmp/` — Temporary files
-- Full path resolution, directory traversal, file ops
 
 ### app/session.py — Session Logging
 
-- `log_cmd(cmd, output)` — Appends to `~/.tether/session.log` with timestamps
-- `view_log(n)` — Returns last N lines of the session log
+- `log_cmd(cmd, output)` — Appends to `~/.tether/session.log`
+- `view_log(n)` — Returns last N lines
 
 ## Command Modules
 
@@ -93,58 +186,49 @@ Located in `app/commands/`:
 | `recon.py`    | nmap, dnsrecon, gobuster, theharvester, whatweb, whois, enum4linux, cewl |
 | `exploit.py`  | searchsploit, hydra, hash-identifier             |
 | `anon.py`     | proxychains, macchanger, anonsurf                |
-| `scan.py`     | nikto (web vuln scanner), nuclei (template scanner)|
-| `web.py`      | wpscan (WordPress enumeration + vuln DB)         |
+| `scan.py`     | nikto, nuclei                                    |
+| `web.py`      | wpscan                                           |
 | `forensics.py`| binwalk, hexdump, strings, exiftool              |
 | `cron.py`     | CronDaemon (list/add/del/start/stop/status)      |
-| `wireless.py` | iwconfig, airmon-ng, airodump-ng (via netsh)    |
-
-Each module exports a `register(commands, aliases)` function called by
-`register_all()` in `register.py` during shell initialization.
+| `wireless.py` | iwconfig, airmon-ng, airodump-ng                |
 
 ## Kernel Layer
 
 ### kernel/torctl.py
 
-Communicates with Tor's control port (127.0.0.1:9051). Sends `SIGNAL NEWNYM`
-to request a new circuit (new exit node IP). Uses raw sockets — no external
-dependencies. Authenticates via `AUTHENTICATE` with empty string (default
-Tor cookie auth is supported).
+Communicates with Tor control port (127.0.0.1:9051). Sends `SIGNAL NEWNYM`
+to request a new circuit. Uses raw sockets — no external dependencies.
 
 ### kernel/probe.py
 
 Queries external services (ipify.org, icanhazip.com, ifconfig.me, api.ipify.org)
-through the Tor SOCKS5 proxy to verify current public IP. Falls through multiple
-services for reliability. Timeout: 10 seconds per service.
+through Tor SOCKS5 proxy to verify current public IP. Multiple fallbacks.
 
 ### kernel/rotator.py
 
-Orchestrator combining torctl + probe into a single `rotate()` call.
-Flow:
+Orchestrator combining torctl + probe:
 1. `probe.get_current_ip()` — record old IP
 2. `torctl.newnym()` — SIGNAL NEWNYM
-3. Wait 3 seconds for circuit switch
+3. Wait 3 seconds
 4. `probe.get_current_ip()` — record new IP
 5. Compare: if different, success
-6. Returns dict: `{success, old_ip, new_ip, rotations}`
 
 ### kernel/scheduler.py
 
-Background threading-based scheduler. Calls `rotator.rotate()` every N seconds
-(default 60). Logs each rotation with timestamp. Daemon mode runs in background
-process. Can be stopped via `stop_daemon()` or PID file.
+Background threading scheduler. Calls `rotator.rotate()` every N seconds
+(default 60). Logs each rotation. Daemon mode runs in background process.
 
 ## Data Flow
 
 ```
 User launches tether
-        |
+    |
    boot_sequence()
-        |
+    |
    splash_screen() -> matrix_rain() -> logo -> boot msgs
-        |
+    |
    shell.start()
-        |
+    |
    REPL loop:
      readline("> ")
      _execute(command):
@@ -153,7 +237,7 @@ User launches tether
        capture output
        write to redirect file if needed
        return output to user
-        |
+    |
    On exit:
      stop scheduler (if running)
      show_cursor()
@@ -176,12 +260,12 @@ socks_port = 9050
 ## Security Model
 
 - All traffic routes through Tor SOCKS5 proxy (127.0.0.1:9050)
-- DNS lookups go through Tor (SOCKS5 resolves remotely)
-- Kill switch blocks non-Tor traffic
+- iptables kill switch blocks all non-Tor traffic at kernel level
+- DNS resolved through Tor (SOCKS5 remote resolution)
 - Multiple fallback IP verification services
-- No persistent logs of IP history by default
+- Boots entirely in RAM — no persistent storage
 
-## Cross-Platform Support
+## Cross-Platform Support (App Only)
 
 | Feature            | Linux | macOS | Windows |
 |--------------------|-------|-------|---------|
@@ -194,22 +278,13 @@ socks_port = 9050
 
 ## Dependencies
 
-- **Python 3.7+** — core runtime
-- **Tor daemon** — provides the anonymization network
-- **PySocks** — SOCKS5 proxy support for urllib
-- **Rich** — terminal formatting (optional, fallback to ANSI)
+- **Linux kernel 6.1.44** — boot platform (via Buildroot)
+- **Busybox 1.36.1** — system utilities + init
+- **Tor 0.4.8.11** — anonymization network
+- **iptables 1.8.9** — kernel-level kill switch
+- **Python 3.11** — runtime for the Tether app
+- **PySocks** — SOCKS5 proxy support
 
 ## Test Coverage
 
-76 tests across all subsystems:
-
-- `test_torctl.py` — Tor control protocol, NEWNYM signal
-- `test_probe.py` — IP verification through proxy
-- `test_rotator.py` — Rotation orchestrator
-- `test_scheduler.py` — Background timer
-- `test_network.py` — Network helpers
-- `test_pidfile.py` — PID file management
-- `test_cli.py` — CLI argument parsing
-- `test_commands_recon.py` — 12 tests for recon module
-- `test_commands_exploit.py` — 15 tests for exploit module
-- `test_commands_anon.py` — 11 tests for anon module
+76 tests across all subsystems.

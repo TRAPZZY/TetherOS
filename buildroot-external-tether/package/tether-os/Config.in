@@ -1,0 +1,5 @@
+config BR2_PACKAGE_TETHER_OS
+    bool "tether-os"
+    depends on BR2_PACKAGE_PYTHON3
+    help
+        Tether OS shell and Tor rotation engine.

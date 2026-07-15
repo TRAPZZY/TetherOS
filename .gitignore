@@ -9,3 +9,8 @@ build/
 .tether/
 .venv/
 venv/
+initramfs/
+buildroot-[0-9]*/
+output/
+dl/
+*.iso

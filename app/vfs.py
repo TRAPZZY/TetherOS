@@ -56,7 +56,7 @@ class VirtualFS:
             "/etc/shadow":      "root:!:19876:0:99999:7:::\n",
             "/etc/group":       "root:x:0:\nwheel:x:10:root\n",
             "/etc/fstab":       "# Tether OS virtual filesystem\nproc /proc proc defaults 0 0\n",
-            "/etc/os-release":  "NAME=\"Tether OS\"\nVERSION=\"1.0.0\"\nID=tether\nID_LIKE=arch\nPRETTY_NAME=\"Tether OS 1.0.0 (Trap Hub)\"\n",
+            "/etc/os-release":  "NAME=\"Tether OS\"\nVERSION=\"1.1.0\"\nID=tether\nID_LIKE=arch\nPRETTY_NAME=\"Tether OS 1.1.0 (Trap Hub)\"\n",
         }
         for path, content in etc_files.items():
             self._nodes[path] = {

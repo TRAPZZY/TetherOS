@@ -1,0 +1,1 @@
+source "$BR2_EXTERNAL_TETHER_OS_PATH/package/tether-os/Config.in"
