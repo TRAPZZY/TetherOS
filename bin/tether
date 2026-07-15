@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""tether -- Tether OS launcher
+Launches the full-screen interactive shell by default.
+Use --cli for the traditional command-line interface.
+"""
+
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+if len(sys.argv) > 1 and sys.argv[1] in ("--cli", "check", "status", "rotate",
+                                           "ip", "stop", "start", "info", "config"):
+    from app.cli import main as cli_main
+    cli_main()
+else:
+    from app.shell import main as shell_main
+    shell_main()

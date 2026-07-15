@@ -1,0 +1,24 @@
+# Tor configuration template for Tether OS
+# Copy to /etc/tor/torrc (Unix) or Tor Browser's Data/Tor/torrc (Windows)
+
+## SOCKS proxy
+SOCKSPort 127.0.0.1:9050
+
+## Control port (required for Tether OS rotation)
+ControlPort 127.0.0.1:9051
+## Uncomment and generate with: tor --hash-password 'your_password'
+# HashedControlPassword 16:...
+
+## Exit node country selection (optional - uncomment to restrict)
+# ExitNodes {us},{ca},{de},{gb},{nl},{jp},{au}
+
+## Privacy hardening
+ExitRelay 0
+BridgeRelay 0
+CircuitBuildTimeout 30
+LearnCircuitBuildTimeout 0
+MaxCircuitDirtiness 600
+NewCircuitPeriod 60
+
+## Logging
+Log notice file /var/log/tor/tether.log
