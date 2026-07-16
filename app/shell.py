@@ -8,7 +8,6 @@ import socket
 import subprocess
 import io
 import re as _re
-from collections import deque
 
 sys.path.insert(0, real_os.path.dirname(real_os.path.dirname(real_os.path.abspath(__file__))))
 
@@ -168,10 +167,6 @@ class LineEditor:
                         sys.stdout.write(self.buffer[self.cursor_pos])
                         self.cursor_pos += 1
                         sys.stdout.flush()
-                elif arrow == b'I':
-                    self.shell._scroll(-self.shell._scroll_page)
-                elif arrow == b'Q':
-                    self.shell._scroll(self.shell._scroll_page)
             elif ch == b'\t':
                 self._handle_tab()
             else:
@@ -234,12 +229,6 @@ class LineEditor:
                         elif seq == '[C':
                             if self.cursor_pos < len(self.buffer):
                                 self.cursor_pos += 1
-                        elif seq == '[5':
-                            if sys.stdin.read(1) == '~':
-                                self.shell._scroll(-self.shell._scroll_page)
-                        elif seq == '[6':
-                            if sys.stdin.read(1) == '~':
-                                self.shell._scroll(self.shell._scroll_page)
                     elif ch.isprintable():
                         self.buffer = self.buffer[:self.cursor_pos] + ch + self.buffer[self.cursor_pos:]
                         self.cursor_pos += 1
@@ -315,13 +304,6 @@ class TetherShell:
         self._aliases = {}
         self._register_commands()
 
-        self._out_buf = []
-        self._out_lines = deque(maxlen=2000)
-        self._scroll_ofs = 0
-        self._scroll_page = 10
-        self._header_h = 6
-        self._max_scroll_lines = 2000
-
     def _register_commands(self):
         self._aliases = {
             "q": "exit", "quit": "exit", "cls": "clear",
@@ -368,63 +350,7 @@ class TetherShell:
         register_all_commands(self._commands, self._aliases)
 
     def _out(self, text="", end="\n"):
-        self._out_buf.append(str(text) + end)
-
-    def _flush(self):
-        if not self._out_buf:
-            return
-        for line in self._out_buf:
-            self._out_lines.append((line, _strip_ansi(line)))
-        self._out_buf = []
-        self._scroll_ofs = 0
-
-    def _scroll(self, delta):
-        max_ofs = max(0, len(self._out_lines) - 1)
-        self._scroll_ofs = max(0, min(max_ofs, self._scroll_ofs + delta))
-        self._paint()
-
-    def _draw_header(self):
-        w = shutil.get_terminal_size().columns
-        sep = _col("primary", "=" * min(w - 2, 54))
-        lines = [
-            f"  {sep}",
-            f"  {_col('primary', 'TRAP HUB')} {_col('accent', 'v1.0.0')}  |  {_col('secondary', 'SECURE TERMINAL')}",
-            f"  {sep}",
-            f"  {_dim('Type')} {_col('accent', 'help')} {_dim('for commands')}  |  {_col('accent', 'theme list')} {_dim('to change colors')}",
-            f"  {_dim(f'{len(self._commands)} built-in commands')}",
-            f"  {sep}",
-        ]
-        for i, line in enumerate(lines):
-            sys.stdout.write(f"\033[{1 + i};1H\033[2K{line}\033[K")
-        sys.stdout.flush()
-
-    def _paint(self):
-        h = shutil.get_terminal_size().lines
-        top = self._header_h
-        scroll_h = h - top - 2
-        if scroll_h < 1:
-            scroll_h = 1
-
-        total = len(self._out_lines)
-        end = total - self._scroll_ofs
-        start = max(0, end - scroll_h)
-        visible = list(self._out_lines)[start:end]
-
-        parts = []
-        for i, (raw, _) in enumerate(visible):
-            parts.append(f"\033[{top + 1 + i};1H\033[2K{raw}")
-        for i in range(len(visible), scroll_h):
-            parts.append(f"\033[{top + 1 + i};1H\033[2K")
-
-        prompt = "\033[36m>\033[0m "
-        parts.append(f"\033[{h - 1};1H\033[2K{prompt}{self._editor.buffer}")
-        parts.append(self._status_bar.render_str(h))
-
-        plen = len(_strip_ansi(prompt))
-        ccol = plen + self._editor.cursor_pos + 1
-        parts.append(f"\033[{h - 1};{ccol}H")
-
-        sys.stdout.write("".join(parts))
+        sys.stdout.write(str(text) + end)
         sys.stdout.flush()
 
     def _info(self, text):
@@ -764,10 +690,7 @@ class TetherShell:
 
     def _cmd_clear(self, args):
         clear()
-        self._draw_header()
-        self._out_lines.clear()
-        self._out_buf = []
-        self._scroll_ofs = 0
+        self._setup_screen()
 
     def _cmd_echo(self, args):
         self._out("  " + " ".join(args))
@@ -1227,6 +1150,12 @@ class TetherShell:
         if not line.strip():
             return
 
+        h = shutil.get_terminal_size().lines
+        if h < 10:
+            h = 25
+        sys.stdout.write(f"\033[{h - 2};1H")
+        sys.stdout.flush()
+
         raw = line.strip()
         append_mode = False
         redirect_file = None
@@ -1366,22 +1295,46 @@ class TetherShell:
     def _strip_ansi(self, s):
         return _strip_ansi(s)
 
+    def _setup_screen(self):
+        w = shutil.get_terminal_size().columns
+        sep = _col("primary", "=" * min(w - 2, 54))
+        lines = [
+            f"  {sep}",
+            f"  {_col('primary', 'TRAP HUB')} {_col('accent', 'v1.0.0')}  |  {_col('secondary', 'SECURE TERMINAL')}",
+            f"  {sep}",
+            f"  {_dim('Type')} {_col('accent', 'help')} {_dim('for commands')}  |  {_col('accent', 'theme list')} {_dim('to change colors')}",
+            f"  {_dim(f'{len(self._commands)} built-in commands')}",
+            f"  {sep}",
+        ]
+        for i, line in enumerate(lines):
+            sys.stdout.write(f"\033[{1 + i};1H\033[2K{line}\033[K")
+        h = shutil.get_terminal_size().lines
+        if h < 10:
+            h = 25
+        sys.stdout.write(f"\033[7;{h-2}r")
+        sys.stdout.write("\033[7;1H")
+        sys.stdout.flush()
+
     def start(self):
         hide_cursor()
         self.running = True
         self._start_time = time.time()
         boot_sequence()
         clear()
-        self._draw_header()
-        self._paint()
+        self._setup_screen()
         try:
             while self.running:
+                h = shutil.get_terminal_size().lines
+                if h < 10:
+                    h = 25
+                sys.stdout.write(f"\033[{h - 1};1H\033[2K\033[36m>\033[0m ")
+                sys.stdout.write(self._status_bar.render_str(h))
+                sys.stdout.flush()
                 line = self._editor.read()
                 if line.strip():
                     self._execute(line)
-                self._flush()
-                self._paint()
         finally:
+            sys.stdout.write("\033[r")
             self.shutdown()
 
     def shutdown(self):
