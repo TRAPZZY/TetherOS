@@ -1361,3 +1361,6 @@ class TetherShell:
 def main():
     shell = TetherShell()
     shell.start()
+
+if __name__ == "__main__":
+    main()

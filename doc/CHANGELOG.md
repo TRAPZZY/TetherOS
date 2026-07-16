@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.1.1 (2026-07-16)
+
+### Scroll Region Terminal UI
+
+- **ANSI scroll region layout** — Terminal partitioned into fixed header (lines 1-6), scrollable body (lines 7 to h-2), input prompt (h-1), and status bar (h) using DECSTBM (`\033[7;{h-2}r`)
+- **Fixed TRAP HUB header** — Static title bar with version, help hint, command count, and separator line; never scrolls away
+- **Fixed status bar** — Bottom line shows current IP, rotation count, Tor status, threat level, and active theme
+- **Command output scrolls** — Only the middle region scrolls when output exceeds available lines
+
+### Bug Fixes
+
+- **Spinner Unicode crash** — Replaced Braille Unicode spinner chars (`⠋⠙⠹...`) with ASCII `| / - \` to fix `UnicodeEncodeError` on terminals using CP1252 encoding
+- **Logo Unicode crash** — Replaced Unicode box-drawing characters (`▐╚╔╝╗═║`) in `TRAP_HUB_LOGO` with pure ASCII art to fix encoding errors on non-UTF-8 terminals
+- **Shell entry point** — Added `if __name__ == "__main__": main()` block at the end of `shell.py` so the script runs when invoked directly
+
+### Build System
+
+- **ISO patching** — Rebuilt `tether-os-v26.iso` from v25 by extracting initramfs, patching `shell.py` + `banner.py`, repacking with `find . -print0 | cpio --null -o --format=newc | gzip -9`
+- **Initramfs preservation** — Fixed cpio repack to use `-print0` and `--null` flags, preserving symlinks and device nodes
+
 ## v1.1.0 (2026-07-15)
 
 ### Buildroot Linux Distribution

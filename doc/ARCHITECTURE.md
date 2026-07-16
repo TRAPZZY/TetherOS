@@ -1,6 +1,6 @@
 # Tether OS Architecture
 
-**Version:** 1.1.0  
+**Version:** 1.1.1  
 **Author:** Trapzzy  
 **Design Philosophy:** Unix-inspired — do one thing well, compose via pipes. Bootable from ISO, fits entirely in RAM.
 
@@ -28,39 +28,37 @@ ISOLINUX (from ISO)
   v
 Linux Kernel 6.1.44
   |  Unpacks initramfs (rootfs.cpio.gz) into tmpfs
-  |  Runs /init (symlink to /sbin/init → Busybox)
+  |  Runs /init (custom PID 1 shell script)
   v
-Busybox init
-  |  Reads /etc/inittab
-  |  ::sysinit:/etc/init.d/rcS
+/init (PID 1)
+  |  mount -t proc /proc
+  |  /etc/init.d/rcS (delegates boot scripts)
   v
-rcS (boot script)
-  |  mount -t proc, sysfs, tmpfs, devpts
-  |  mount -o remount,rw /
+rcS (runs via /init, not Busybox init)
+  |  mount -t sysfs, tmpfs, devpts
   |  mdev -s (populate /dev)
   |  ip link set lo up
   |  dmesg -n 1
-  |  echo "Starting services..."
+  |
+  |  for i in /etc/init.d/S*; do $i start; done
+  |    S01iptables: Firewall kill switch
+  |      -F, default DROP, allow loopback + Tor ports + DNS + established
+  |    S02network: DHCP on eth0
+  |      ip link set eth0 up; udhcpc -i eth0 -q -n
+  |    S03tor: Tor daemon
+  |      tor -f /etc/tor/torrc &
+  |      SOCKS5 proxy on :9050
+  |      Control port on :9051
   v
-for i in /etc/init.d/S*; do $i start; done
-  |
-  +-- S01iptables: Firewall kill switch
-  |     -F, default DROP, allow loopback + Tor ports + DNS + established
-  |
-  +-- S02network: DHCP on eth0
-  |     ip link set eth0 up
-  |     udhcpc -i eth0 -q -n
-  |
-  +-- S03tor: Tor daemon
-  |     tor -f /etc/tor/torrc &
-  |     SOCKS5 proxy on :9050
-  |     Control port on :9051
-  |
+/init continues
+  |  Launches /usr/bin/tether
+  |    exec python3 -m app.shell
   v
-Getty on ttyS0
-  |
-  v
-Login prompt
+Tether OS Shell (REPL)
+
+If the shell exits (crash or user exit), /init respawns it in a
+while loop. If /usr/bin/tether is missing, a rescue /bin/sh
+is provided with the message "Rescue shell (exit to restart)."
 ```
 
 ### Init Scripts
@@ -137,13 +135,19 @@ buildroot-external-tether/
 
 The shell provides a Claude Code-inspired terminal interface with:
 
-- **`>` prompt** — Clean, minimal prompt prefix
-- **Bottom status bar** — Current IP, rotation count, Tor status, threat level, active theme
-- **Pipe support** — `command1 | command2` chains commands
-- **Redirect support** — `>` write, `>>` append to virtual filesystem
+- **Scroll region layout** — Uses ANSI `DECSTBM` (`\033[<top>;<bottom>r`) to partition the terminal:
+  - **Fixed header** (lines 1-6): TRAP HUB title bar, version, command hint, command count, separator
+  - **Scrollable body** (lines 7 to h-2): Command output, scrolls independently via the ANSI scroll region
+  - **Fixed footer** (line h-1): Input prompt (`> `) with inline editing
+  - **Fixed status bar** (line h): Current IP, rotation count, Tor status, threat level, active theme
+- **`>` prompt** — Clean, minimal prompt prefix at the fixed footer line
+- **Pipe support** — `command1 | command2` chains commands via `_pipe_output()`
+- **Redirect support** — `>` write, `>>` append to virtual filesystem paths
 - **`.th` scripts** — Positional arg substitution (`$1`-`$N`, `$@`)
 - **Session persistence** — `save`/`restore` commands write/read JSON state
 - **Command registry** — 90+ commands loaded from `app/commands/` modules
+- **Tab completion** — Auto-completes commands and virtual filesystem paths
+- **Command history** — In-memory history with up/down arrow navigation
 
 ### app/banner.py — Boot Sequence
 
