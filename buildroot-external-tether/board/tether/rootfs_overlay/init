@@ -1,0 +1,30 @@
+#!/bin/sh
+# Tether OS -- PID 1 (bulletproof)
+# NO set -e -- PID 1 must NEVER exit (kernel panics if we do)
+
+mount -t proc none /proc 2>/dev/null || true
+
+if ! /etc/init.d/rcS 2>/dev/null; then
+    echo "init: rcS error, continuing..." > /dev/console 2>/dev/null
+fi
+
+mknod /dev/console c 5 1 2>/dev/null || true
+mkdir -p /home/tether 2>/dev/null || true
+stty sane < /dev/console 2>/dev/null || true
+
+export HOME=/root
+export TERM=linux
+cd /home/tether 2>/dev/null || true
+
+echo "[OK] Tether OS v1.1.0 -- starting TRAP HUB..." > /dev/console 2>/dev/null
+
+while true; do
+    if [ -x /usr/bin/tether ]; then
+        /usr/bin/tether < /dev/console > /dev/console 2>&1
+    else
+        echo "init: /usr/bin/tether not found" > /dev/console 2>/dev/null
+    fi
+    stty sane < /dev/console 2>/dev/null || true
+    echo "init: Rescue shell (exit to restart)." > /dev/console 2>/dev/null
+    /bin/sh < /dev/console > /dev/console 2>&1
+done

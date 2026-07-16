@@ -269,7 +269,8 @@ def _cmd_anonsurf(args):
                 for line in f:
                     print(f"    {line.strip()}")
 
-        print(f"  Tor daemon:   {'\033[32mRUNNING\033[0m' if tor_running else '\033[31mSTOPPED\033[0m'}")
+        tor_status = "\033[32mRUNNING\033[0m" if tor_running else "\033[31mSTOPPED\033[0m"
+        print(f"  Tor daemon:   {tor_status}")
         print()
         print("  To activate:  anonsurf start")
         print("  To deactivate: anonsurf stop")

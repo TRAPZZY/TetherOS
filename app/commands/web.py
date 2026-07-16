@@ -3,7 +3,13 @@
 import sys
 import urllib.request
 import urllib.error
-import ssl
+try:
+    import ssl
+    _HAVE_SSL = True
+except ImportError:
+    _HAVE_SSL = False
+    import warnings
+    warnings.warn("ssl module unavailable - HTTPS features disabled")
 import re
 import time
 

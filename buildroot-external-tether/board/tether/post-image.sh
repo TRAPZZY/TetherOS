@@ -26,7 +26,7 @@ DEFAULT tether
 LABEL tether
     LINUX /bzImage
     INITRD /rootfs.cpio.gz
-    APPEND console=ttyS0 net.ifnames=0
+    APPEND console=ttyS0 console=tty1 nomodeset net.ifnames=0
 CFG
 
 xorriso -as mkisofs \

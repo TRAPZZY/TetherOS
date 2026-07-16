@@ -27,12 +27,17 @@ pip3 install pysocks --root=$TARGET_DIR 2>/dev/null || true
 rm -rf $TARGET_DIR/usr/lib/python3.*/test/
 rm -rf $TARGET_DIR/usr/lib/python3.*/idlelib/
 
-# Create /init symlink for initramfs boot (kernel runs /init from cpio)
-ln -sf sbin/init $TARGET_DIR/init
+# /init is provided via rootfs_overlay/init (static file, no heredoc risk)
 
 # Make init scripts executable
 chmod +x $TARGET_DIR/etc/init.d/rcS
 chmod +x $TARGET_DIR/etc/init.d/S01iptables
 chmod +x $TARGET_DIR/etc/init.d/S02network
 chmod +x $TARGET_DIR/etc/init.d/S03tor
-chmod +x $TARGET_DIR/usr/bin/tether 2>/dev/null || true
+
+# Create /usr/bin/tether entry point (launches the Tether OS shell)
+cat > $TARGET_DIR/usr/bin/tether << 'TETHER_WRAPPER'
+#!/bin/sh
+exec python3 -m app.shell "$@"
+TETHER_WRAPPER
+chmod +x $TARGET_DIR/usr/bin/tether

@@ -4,7 +4,13 @@ import sys
 import urllib.request
 import urllib.error
 import socket
-import ssl
+try:
+    import ssl
+    _HAVE_SSL = True
+except ImportError:
+    _HAVE_SSL = False
+    import warnings
+    warnings.warn("ssl module unavailable - HTTPS features disabled")
 import json
 import time
 import re
@@ -148,7 +154,8 @@ def _cmd_nikto(args):
     severity_colors = {"HIGH": "\033[31m", "MEDIUM": "\033[33m", "LOW": "\033[36m", "INFO": "\033[32m"}
     for sev, desc in issues:
         color = severity_colors.get(sev, "\033[0m")
-        print(f"  {color}[{sev}]{'\033[0m'} {desc}")
+        reset = "\033[0m"
+        print(f"  {color}[{sev}]{reset} {desc}")
 
     print()
     print("  Nikto scan complete.")

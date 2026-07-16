@@ -49,7 +49,7 @@ def main():
                     "Tor Browser detected (port 9150) but not Tor Expert Bundle.\n"
                     "  Tor Browser does not expose the control port.\n"
                     "  Run this to start the correct Tor daemon:\n"
-                    f"    {os.path.expanduser('~\.tether\tor\start-tor.cmd')}"
+                    "    {}".format(os.path.expanduser(r'~\.tether\tor\start-tor.cmd'))
                 )
             else:
                 log.error(
