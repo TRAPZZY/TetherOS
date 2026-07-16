@@ -377,7 +377,6 @@ class TetherShell:
             self._out_lines.append((line, _strip_ansi(line)))
         self._out_buf = []
         self._scroll_ofs = 0
-        self._paint()
 
     def _scroll(self, delta):
         max_ofs = max(0, len(self._out_lines) - 1)
@@ -1381,6 +1380,7 @@ class TetherShell:
                 if line.strip():
                     self._execute(line)
                 self._flush()
+                self._paint()
         finally:
             self.shutdown()
 
