@@ -21,6 +21,8 @@ class TetherConfig:
     tor_control_port: int = 9051
     tor_password: Optional[str] = None
     tor_cookie_path: Optional[str] = None
+    lock_enabled: bool = True
+    lock_timeout_seconds: int = 600
 
     def tor_options(self):
         return {
@@ -107,4 +109,8 @@ def load_config(path=None):
         tor_control_port=_get_int(parser, "tor", "control_port", 9051),
         tor_password=password,
         tor_cookie_path=cookie_path,
+        lock_enabled=_get_bool(parser, "security", "lock_enabled", True),
+        lock_timeout_seconds=_get_int(
+            parser, "security", "lock_timeout_seconds", 600, 30, 86400
+        ),
     )

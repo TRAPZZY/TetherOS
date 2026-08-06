@@ -1,0 +1,49 @@
+#!/bin/sh
+# Trusted greeter for the fixed, non-root TRAP HUB operator account.
+set -u
+
+STATE_DIR=/run/tether
+READY_FILE="$STATE_DIR/password-ready"
+SETUP_LOCK="$STATE_DIR/password-setup.lock"
+
+mkdir -p "$STATE_DIR"
+chmod 0750 "$STATE_DIR"
+
+if [ ! -f "$READY_FILE" ]; then
+    printf '\n  TRAP HUB // SECURE SESSION SETUP\n'
+    printf '  Press ENTER to create the password for this boot session.\n'
+    IFS= read -r _answer
+
+    if mkdir "$SETUP_LOCK" 2>/dev/null; then
+        trap 'rm -rf "$SETUP_LOCK"' EXIT INT TERM HUP
+        printf '%s\n' "$$" > "$SETUP_LOCK/pid"
+        if [ ! -f "$READY_FILE" ]; then
+            until passwd tether; do
+                printf '  Password setup failed. Please try again.\n'
+            done
+            umask 077
+            : > "$READY_FILE"
+            printf '  [OK] TRAP HUB session password configured.\n'
+        fi
+        rm -rf "$SETUP_LOCK"
+        trap - EXIT INT TERM HUP
+    else
+        printf '  Password setup is active on another console. Waiting...\n'
+        while [ ! -f "$READY_FILE" ]; do
+            if [ -r "$SETUP_LOCK/pid" ]; then
+                owner_pid="$(cat "$SETUP_LOCK/pid" 2>/dev/null || true)"
+                if [ -n "$owner_pid" ] && ! kill -0 "$owner_pid" 2>/dev/null; then
+                    rm -rf "$SETUP_LOCK"
+                    exec "$0"
+                fi
+            fi
+            sleep 1
+        done
+    fi
+fi
+
+mkdir -p /run/user/1000
+chown tether:tether /run/user/1000
+chmod 0700 /run/user/1000
+
+exec /bin/login tether

@@ -2,5 +2,5 @@
 """Tether OS launcher for Linux distribution."""
 import sys, os
 sys.path.insert(0, '/usr/lib/tether-os')
-from app.shell import main
+from app.entrypoint import main
 raise SystemExit(main())

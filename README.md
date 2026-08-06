@@ -4,8 +4,8 @@
 
 Built by [Trapzzy](https://github.com/TRAPZZY) — product of TRAP HUB.
 
-![Buildroot](https://img.shields.io/badge/buildroot-2024.02.3-green.svg)
-![Linux](https://img.shields.io/badge/kernel-6.1.44-blue.svg)
+![Buildroot](https://img.shields.io/badge/buildroot-2025.02.16_LTS-green.svg)
+![Linux](https://img.shields.io/badge/kernel-6.12.27-blue.svg)
 ![Tor](https://img.shields.io/badge/tor-0.4.8.11-purple.svg)
 ![Python](https://img.shields.io/badge/python-3.11-yellow.svg)
 ![License](https://img.shields.io/badge/license-MIT-red.svg)
@@ -46,7 +46,9 @@ On Windows with QEMU installed:
 & "C:\Program Files\qemu\qemu-system-x86_64w.exe" -cdrom tether-os.iso -m 512
 ```
 
-The system boots in ~10 seconds. After the boot animation completes, you are dropped into the Tether OS shell.
+At first boot, TetherOS asks you to create a password for the non-root
+`tether` account. Every console then uses the standard login flow before it
+can enter the TRAP HUB shell.
 
 ### Write to USB
 
@@ -72,6 +74,32 @@ python -m app.entrypoint
 ---
 
 ## Features
+
+### Tether Shell 2 release candidate
+
+- **TRAP HUB Command Deck** — A live session view for route verification,
+  managed jobs, lock readiness, risk level, and command discovery; use
+  `deck` or `deck --json`.
+- **Real authenticated sessions** — No root auto-login or unauthenticated
+  rescue shell. The boot image creates a non-root operator password and uses
+  `getty`/`login` for every console.
+- **Kali-style session lock** — `lock` and inactivity timeout delegate to the
+  operating system. TetherOS uses `vlock -a` on local consoles and forces
+  serial sessions back through login.
+- **Managed background jobs** — Append `&` to an external command, then use
+  `jobs`, `jobs show`, `wait`, and `cancel`. Commands are launched without a
+  host command shell and output is bounded.
+- **Typed command contracts** — Commands have machine-readable metadata,
+  exit codes, unique IDs, timing, and lifecycle events. Run `help --json` for
+  the contract catalog.
+- **Privacy-safe history and logs** — Password/token arguments are redacted;
+  sensitive command output is omitted from persistent session logs.
+- **Optional graphical edition** — `TETHER_EDITION=desktop` builds a Weston
+  kiosk and GTK/PyGObject Command Deck. Core remains dependency-light and is
+  the default.
+
+See [the Shell 2 engineering plan](doc/SHELL_2_PLAN.md) and
+[secure-session design](doc/SECURE_SESSION.md).
 
 ### Core
 
@@ -304,7 +332,7 @@ Tether OS Shell (REPL)
 
 ## Building from Source
 
-### Prerequisites (Ubuntu/WSL2)
+### Prerequisites (Ubuntu, Debian, or WSL2)
 
 ```bash
 sudo apt install build-essential curl file flex bison \
@@ -324,12 +352,26 @@ cd TetherOS
 bash scripts/build-distro.sh
 ```
 
-The script downloads Buildroot 2024.02.3, configures it for Tether OS, compiles the kernel and all packages, and produces `tether-os.iso` in `~/buildroot-2024.02.3/output/images/`.
+The script downloads the checksum-pinned Buildroot 2025.02.16 LTS release,
+configures it for TetherOS, compiles the kernel and all packages, and writes
+`tether-os.iso` under `~/buildroot-2025.02.16/output/images/`.
+
+Core edition (default):
+
+```bash
+bash scripts/build-distro.sh
+```
+
+Optional graphical feasibility edition:
+
+```bash
+TETHER_EDITION=desktop bash scripts/build-distro.sh
+```
 
 ### Quick Rebuild (after code changes)
 
 ```bash
-cd ~/buildroot-2024.02.3
+cd ~/buildroot-2025.02.16
 make -j$(nproc)
 ```
 

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Select the validated TRAP HUB interface for this image edition.
+
+session_tty="$(tty 2>/dev/null || true)"
+if [ "$(cat /etc/tether-edition 2>/dev/null)" = "desktop" ] && [ "$session_tty" = "/dev/tty1" ]; then
+    export TETHER_DESKTOP=1
+    exec /usr/bin/tether-desktop
+fi
+exec /usr/bin/tether

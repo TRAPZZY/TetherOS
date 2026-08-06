@@ -8,6 +8,9 @@ CLI_COMMANDS = {"check", "status", "rotate", "ip", "stop", "start", "info", "con
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "--gui":
+        from app.gui import main as gui_main
+        return gui_main(args[1:])
     if args and args[0] == "--cli":
         args.pop(0)
         from app.cli import CLI

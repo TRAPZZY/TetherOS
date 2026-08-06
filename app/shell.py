@@ -9,6 +9,7 @@ import subprocess
 import io
 import re as _re
 import threading
+import uuid
 
 sys.path.insert(0, real_os.path.dirname(real_os.path.dirname(real_os.path.abspath(__file__))))
 
@@ -21,16 +22,27 @@ from app.banner import (
     boot_sequence, clear, hide_cursor, show_cursor, reset_color, spinner,
 )
 from app.theme import theme, list_themes
-from app.session import log_cmd, view_log
+from app.session import log_cmd, sanitize_command, view_log
 from app.tools import Tools
 from app.vfs import VirtualFS
 from app.config import load_config
 from app.shell_parser import parse_line, ShellSyntaxError
+from app.security import SessionLocker
+from app.privilege import PowerBrokerClient
+from app.commanding import (
+    CommandRegistry, CommandResult, EventBus, command_event,
+)
+from app.jobs import JobManager
+from app.deck import DeckState, render_deck
 from app.version import __version__
 from app.commands import register_all as register_all_commands
 
 HOSTNAME = "trap-hub"
-USERNAME = "root"
+USERNAME = real_os.environ.get(
+    "USER", "tether" if real_os.environ.get("TETHER_BOOT_IMAGE") == "1" else "operator"
+)
+
+_LOCK_REQUEST = object()
 
 _BG = "\033[40m"
 _RESET_BG = "\033[0m"
@@ -131,13 +143,20 @@ class LineEditor:
 
     def _read_win(self):
         import msvcrt
+        last_activity = time.monotonic()
         while True:
+            if not msvcrt.kbhit():
+                if self.shell._idle_lock_due(last_activity):
+                    return _LOCK_REQUEST
+                time.sleep(0.05)
+                continue
             ch = msvcrt.getch()
+            last_activity = time.monotonic()
             if ch == b'\r':
                 print()
                 cmd = self.buffer.strip()
                 if cmd:
-                    self.history.append(cmd)
+                    self.history.append(sanitize_command(cmd)[0])
                 self.history_pos = len(self.history)
                 return cmd
             elif ch == b'\x03':
@@ -195,18 +214,20 @@ class LineEditor:
         import termios, tty, select
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
+        last_activity = time.monotonic()
         try:
             tty.setraw(fd)
             while True:
                 if select.select([sys.stdin], [], [], 0.1)[0]:
                     ch = sys.stdin.read(1)
+                    last_activity = time.monotonic()
                     if ch in ('\r', '\n'):
                         h = shutil.get_terminal_size().lines
                         sys.stdout.write(f"\033[{h - 1};1H\033[2K")
                         sys.stdout.flush()
                         cmd = self.buffer.strip()
                         if cmd:
-                            self.history.append(cmd)
+                            self.history.append(sanitize_command(cmd)[0])
                         self.history_pos = len(self.history)
                         return cmd
                     elif ch == '\x03':
@@ -251,6 +272,8 @@ class LineEditor:
                         self.buffer = self.buffer[:self.cursor_pos] + ch + self.buffer[self.cursor_pos:]
                         self.cursor_pos += 1
                         self._redraw_input()
+                elif self.shell._idle_lock_due(last_activity):
+                    return _LOCK_REQUEST
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
         return ""
@@ -304,7 +327,9 @@ class LineEditor:
 
 
 class TetherShell:
-    def __init__(self):
+    def __init__(
+        self, locker=None, power_broker=None, event_bus=None, job_manager=None
+    ):
         self.running = False
         self._exit_code = 0
         self._start_time = None
@@ -321,10 +346,17 @@ class TetherShell:
         self._threat_level = 0
         self._stdin_text = None
         self._command_lock = threading.RLock()
+        self._locker = locker or SessionLocker()
+        self._power_broker = power_broker or PowerBrokerClient()
+        self.events = event_bus or EventBus()
+        self._last_result = None
+        self.jobs = job_manager or JobManager()
+        self._lock_pending = False
+        self._lock_reason = "manual"
         self._vfs = VirtualFS()
         self._editor = LineEditor(self)
         self._status_bar = StatusBar(self)
-        self._commands = {}
+        self._commands = CommandRegistry()
         self._aliases = {}
         self._register_commands()
 
@@ -334,9 +366,9 @@ class TetherShell:
             "ll": "ls -la", "la": "ls -a", "..": "cd ..",
             "newnym": "rotate", "tstatus": "status", "whereami": "geoip",
             "speed": "speedtest", "ipconfig": "ifconfig", "ver": "uname -a",
-            "?" : "help", "ththeme": "theme",
+            "?" : "help", "ththeme": "theme", "dashboard": "deck",
         }
-        self._commands = {
+        self._commands = CommandRegistry({
             "cd": self._cmd_cd, "pwd": self._cmd_pwd, "ls": self._cmd_ls,
             "cat": self._cmd_cat, "head": self._cmd_head, "tail": self._cmd_tail,
             "grep": self._cmd_grep, "sort": self._cmd_sort, "wc": self._cmd_wc,
@@ -362,6 +394,9 @@ class TetherShell:
             "nslookup": self._cmd_nslookup, "dig": self._cmd_nslookup,
             "rotate": self._cmd_rotate, "killswitch": self._cmd_killswitch,
             "status": self._cmd_status, "history": self._cmd_history,
+            "lock": self._cmd_lock, "deck": self._cmd_deck,
+            "jobs": self._cmd_jobs, "cancel": self._cmd_cancel,
+            "wait": self._cmd_wait,
             "help": self._cmd_help, "man": self._cmd_help,
             "exit": self._cmd_exit,
             "sudo": self._cmd_sudo, "su": self._cmd_su,
@@ -371,8 +406,24 @@ class TetherShell:
             "script": self._cmd_script, "motd": self._cmd_motd,
             "save": self._cmd_save, "restore": self._cmd_restore,
             "cron": self._cmd_cron,
-        }
+        })
         register_all_commands(self._commands, self._aliases)
+        metadata = {
+            "help": dict(summary="Show command help", category="shell", usage="help [command]"),
+            "lock": dict(summary="Secure the active session", category="security", usage="lock", risk="protected"),
+            "status": dict(summary="Show TetherOS and Tor status", category="tether"),
+            "rotate": dict(summary="Request a new Tor circuit", category="tether", risk="network"),
+            "shutdown": dict(summary="Power off TetherOS", category="system", risk="privileged"),
+            "reboot": dict(summary="Restart TetherOS", category="system", risk="privileged"),
+            "history": dict(summary="Show command history", category="shell"),
+            "deck": dict(summary="Open the TRAP HUB Command Deck", category="shell", usage="deck [--json]"),
+            "jobs": dict(summary="List or inspect background jobs", category="shell", usage="jobs [show ID]"),
+            "cancel": dict(summary="Cancel a background job", category="shell", usage="cancel ID"),
+            "wait": dict(summary="Wait for a background job", category="shell", usage="wait ID [SECONDS]"),
+            "exit": dict(summary="End the TRAP HUB session", category="shell"),
+        }
+        for name, details in metadata.items():
+            self._commands.describe(name, **details)
 
     def _out(self, text="", end="\n"):
         sys.stdout.write(str(text) + end)
@@ -1081,6 +1132,40 @@ class TetherShell:
             self._out(f"  {i:4}  {c}")
 
     def _cmd_help(self, args):
+        if args == ["--json"]:
+            records = []
+            for descriptor in sorted(
+                self._commands.descriptors(), key=lambda item: item.name
+            ):
+                records.append({
+                    "name": descriptor.name,
+                    "summary": descriptor.summary,
+                    "category": descriptor.category,
+                    "usage": descriptor.usage,
+                    "risk": descriptor.risk,
+                    "aliases": sorted(
+                        alias for alias, target in self._aliases.items()
+                        if target == descriptor.name or target.startswith(descriptor.name + " ")
+                    ),
+                })
+            self._out(json.dumps(records, indent=2))
+            return 0
+        if len(args) == 1:
+            requested = args[0].lower()
+            alias_target = self._aliases.get(requested, requested).split()[0]
+            descriptor = self._commands.descriptor(alias_target)
+            if not descriptor:
+                self._err(f"No help is available for: {args[0]}")
+                return 1
+            self._out(_col("primary", f"  TRAP HUB // {descriptor.name.upper()}"))
+            self._out(f"  {descriptor.summary or 'Built-in TRAP HUB command.'}")
+            self._out(f"  Usage:    {descriptor.usage or descriptor.name}")
+            self._out(f"  Category: {descriptor.category}")
+            self._out(f"  Risk:     {descriptor.risk}")
+            return 0
+        if args:
+            self._out("  usage: help [COMMAND|--json]")
+            return 2
         clear()
         w = shutil.get_terminal_size().columns
         self._out(_col("primary", f"  {'=' * min(w - 2, 60)}"))
@@ -1103,7 +1188,10 @@ class TetherShell:
             ("FORENSICS", ["binwalk", "hexdump", "strings", "exiftool"]),
             ("ANONYMITY", ["proxychains", "macchanger", "anonsurf"]),
             ("WIRELESS", ["iwconfig", "airmon-ng", "airodump-ng"]),
-            ("SHELL", ["theme", "log", "script", "motd", "save", "restore", "cron"]),
+            ("SHELL", [
+                "deck", "theme", "lock", "jobs", "cancel", "wait", "log", "script",
+                "motd", "save", "restore", "cron",
+            ]),
             ("TETHER OS", ["rotate", "killswitch", "status", "history", "help", "exit"]),
         ]
         for title, cmds in cats:
@@ -1121,26 +1209,156 @@ class TetherShell:
         self.running = False
 
     def _cmd_sudo(self, args):
-        if not args:
-            self._out("  usage: sudo <command> [args...]")
-            return
-        self._execute(" ".join(args))
+        self._err("Arbitrary root execution is disabled in TRAP HUB.")
+        self._out(_dim("  Use the approved power, network, and Tor commands instead."))
 
     def _cmd_su(self, args):
-        self._ok("Already running as the Tether OS administrative user.")
-        self._out(_dim("  Privilege level does not guarantee anonymity; run 'status' to verify Tor."))
+        self._err("Root login is disabled in the production TetherOS image.")
+
+    def _cmd_lock(self, args):
+        if not self._locker.available():
+            self._err("Trusted session locking is unavailable on this host.")
+            return
+        self._lock_pending = True
+        self._lock_reason = "manual"
+        self._info("Securing the TRAP HUB session...")
+
+    def deck_state(self):
+        snapshots = self.jobs.list()
+        running = sum(job.status in {"running", "cancelling"} for job in snapshots)
+        risk_names = ["LOW", "GUARDED", "ELEVATED", "HIGH", "SEVERE"]
+        elapsed = int(time.time() - self._start_time) if self._start_time else 0
+        return DeckState(
+            version=__version__,
+            session_user=USERNAME,
+            session_uptime_seconds=elapsed,
+            lock_ready=self._locker.available(),
+            lock_timeout_seconds=self.config.lock_timeout_seconds,
+            tor_state=self._tor_status,
+            tor_verified=self._tor_verified,
+            current_ip=self._current_ip,
+            rotation_count=self._rotation_count,
+            threat_level=risk_names[min(self._threat_level, len(risk_names) - 1)],
+            running_jobs=running,
+            finished_jobs=len(snapshots) - running,
+            command_count=len(self._commands),
+        )
+
+    def _cmd_deck(self, args):
+        state = self.deck_state()
+        if args == ["--json"]:
+            self._out(state.to_json())
+            return 0
+        if args:
+            self._out("  usage: deck [--json]")
+            return 2
+        self._out(render_deck(state, shutil.get_terminal_size().columns))
+        return 0
+
+    def _cmd_jobs(self, args):
+        if args and args[0] == "show":
+            if len(args) != 2 or not args[1].isdigit():
+                self._out("  usage: jobs show ID")
+                return 2
+            job = self.jobs.get(int(args[1]))
+            if not job:
+                self._err(f"Unknown job: {args[1]}")
+                return 1
+            self._out(
+                f"  JOB {job.job_id} // {job.status.upper()} // exit={job.returncode}"
+            )
+            self._out(f"  $ {' '.join(job.argv)}")
+            if job.stdout:
+                self._out(job.stdout.rstrip())
+            if job.stderr:
+                self._out(_col("warning", job.stderr.rstrip()))
+            return 0
+
+        jobs = self.jobs.list()
+        if not jobs:
+            self._out("  No managed background jobs.")
+            return 0
+        self._out("  ID   STATUS       TIME     COMMAND")
+        for job in jobs:
+            command = " ".join(job.argv)
+            self._out(
+                f"  {job.job_id:<4} {job.status:<12} "
+                f"{job.duration_seconds:>6.1f}s  {command}"
+            )
+        return 0
+
+    def _cmd_cancel(self, args):
+        if len(args) != 1 or not args[0].isdigit():
+            self._out("  usage: cancel ID")
+            return 2
+        job = self.jobs.cancel(int(args[0]))
+        if not job:
+            self._err(f"Unknown job: {args[0]}")
+            return 1
+        self._ok(f"Job {job.job_id}: {job.status}")
+        return 0
+
+    def _cmd_wait(self, args):
+        if not args or not args[0].isdigit():
+            self._out("  usage: wait ID [SECONDS]")
+            return 2
+        timeout = None
+        if len(args) > 1:
+            try:
+                timeout = max(0.0, float(args[1]))
+            except ValueError:
+                self._err("wait: timeout must be a number")
+                return 2
+        job = self.jobs.wait(int(args[0]), timeout=timeout)
+        if not job:
+            self._err(f"Unknown job: {args[0]}")
+            return 1
+        self._out(f"  Job {job.job_id}: {job.status}")
+        return 0 if job.status == "completed" else 1
 
     def _cmd_shutdown(self, args):
         self._info("Shutting down Tether OS...")
-        time.sleep(0.3)
-        self._exit_code = 64 if real_os.environ.get("TETHER_BOOT_IMAGE") == "1" else 0
+        if real_os.environ.get("TETHER_BOOT_IMAGE") == "1":
+            result = self._power_broker.request("poweroff")
+            if not result.success:
+                self._err(f"Power broker rejected shutdown: {result.message}")
+                return
         self.running = False
 
     def _cmd_reboot(self, args):
         self._info("Rebooting Tether OS...")
-        time.sleep(0.3)
-        self._exit_code = 65 if real_os.environ.get("TETHER_BOOT_IMAGE") == "1" else 0
+        if real_os.environ.get("TETHER_BOOT_IMAGE") == "1":
+            result = self._power_broker.request("reboot")
+            if not result.success:
+                self._err(f"Power broker rejected reboot: {result.message}")
+                return
         self.running = False
+
+    def _idle_lock_due(self, last_activity):
+        return (
+            self.config.lock_enabled
+            and self._locker.available()
+            and time.monotonic() - last_activity >= self.config.lock_timeout_seconds
+        )
+
+    def _perform_lock(self, reason):
+        self._lock_pending = False
+        sys.stdout.write("\033[r")
+        sys.stdout.flush()
+        show_cursor()
+        clear()
+        self._out(_col("primary", "  TRAP HUB // SESSION SECURED"))
+        self._out(_dim(f"  Reason: {reason}. Authentication is handled by TetherOS."))
+        result = self._locker.lock()
+        if getattr(result, "backend", None) in {"logout", "desktop"}:
+            self.running = False
+            return result
+        clear()
+        hide_cursor()
+        self._setup_screen()
+        if not result.success:
+            self._err(result.message or "The trusted lock service failed.")
+        return result
 
     def _cmd_reset(self, args):
         clear()
@@ -1296,6 +1514,27 @@ class TetherShell:
         if not parsed.commands:
             return
 
+        if parsed.background:
+            if len(parsed.commands) != 1 or parsed.redirect_path:
+                self._err(
+                    "background jobs require one external command without redirection"
+                )
+                return
+            argv = self._expand_alias(parsed.commands[0].argv)
+            if argv[0].lower() in self._commands:
+                self._err("background execution is limited to external tools")
+                return
+            try:
+                job = self.jobs.start(argv)
+            except (OSError, RuntimeError, ValueError) as exc:
+                self._err(f"job: {exc}")
+                return
+            message = f"Job {job.job_id} started: {' '.join(job.argv)}"
+            self._ok(message)
+            if not _from_script:
+                log_cmd(raw, message)
+            return job
+
         with self._command_lock:
             output = self._run_pipeline(parsed.commands)
             plain_output = self._strip_ansi(output)
@@ -1342,34 +1581,69 @@ class TetherShell:
         return output or ""
 
     def _run_captured(self, argv, stdin_text=None):
+        result = self._execute_argv(argv, stdin_text=stdin_text)
+        return result.stdout, result
+
+    def _execute_argv(self, argv, stdin_text=None):
+        command_id = uuid.uuid4().hex
+        started_at = time.time()
+        self.events.publish(command_event("command.started", command_id, argv))
         buf = io.StringIO()
         old = sys.stdout
         old_stdin = self._stdin_text
+        exit_code = 0
+        data = None
         sys.stdout = buf
         self._stdin_text = stdin_text
         try:
             if not argv:
-                return "", None
-            cmd = argv[0].lower()
-            args = argv[1:]
-            if cmd in self._commands:
-                try:
-                    self._commands[cmd](args)
-                except KeyboardInterrupt:
-                    sys.stdout.write("\n  Interrupted.")
-                except Exception as e:
-                    sys.stdout.write(f"\n  {cmd}: {e}")
-                    import traceback
-                    traceback.print_exc()
-            elif cmd == "cd" and not args:
-                self._cmd_cd(["~"])
+                exit_code = 2
             else:
-                self._run_system_captured(argv, stdin_text)
+                cmd = argv[0].lower()
+                args = argv[1:]
+                if cmd in self._commands:
+                    try:
+                        returned = self._commands[cmd](args)
+                        if isinstance(returned, CommandResult):
+                            exit_code = returned.exit_code
+                            data = returned.data
+                        elif isinstance(returned, int):
+                            exit_code = returned
+                    except KeyboardInterrupt:
+                        exit_code = 130
+                        sys.stdout.write("\n  Interrupted.")
+                    except Exception as e:
+                        exit_code = 1
+                        sys.stdout.write(f"\n  {cmd}: {e}")
+                        import traceback
+                        traceback.print_exc()
+                elif cmd == "cd" and not args:
+                    self._cmd_cd(["~"])
+                else:
+                    exit_code = self._run_system_captured(argv, stdin_text)
         finally:
             sys.stdout = old
             self._stdin_text = old_stdin
             sys.stdout.flush()
-        return buf.getvalue(), None
+        finished_at = time.time()
+        result = CommandResult(
+            command_id=command_id,
+            argv=tuple(argv),
+            stdout=buf.getvalue(),
+            exit_code=exit_code,
+            started_at=started_at,
+            finished_at=finished_at,
+            data=data,
+        )
+        self._last_result = result
+        self.events.publish(command_event(
+            "command.completed",
+            command_id,
+            argv,
+            exit_code=result.exit_code,
+            duration_ms=result.duration_ms,
+        ))
+        return result
 
     def _run_system_captured(self, argv, stdin_text=None):
         cmd = argv[0]
@@ -1388,12 +1662,16 @@ class TetherShell:
                 sys.stdout.write(r.stderr)
             if r.returncode != 0 and not r.stdout and not r.stderr:
                 sys.stdout.write(f"{cmd}: exited with status {r.returncode}\n")
+            return r.returncode
         except FileNotFoundError:
             sys.stdout.write(f"{cmd}: command not found\n")
+            return 127
         except subprocess.TimeoutExpired:
             sys.stdout.write(f"{cmd}: timed out (60s)\n")
+            return 124
         except Exception as e:
             sys.stdout.write(f"{cmd}: {e}\n")
+            return 1
 
     def _strip_ansi(self, s):
         return _strip_ansi(s)
@@ -1457,8 +1735,13 @@ class TetherShell:
                 sys.stdout.write(self._status_bar.render_str(h))
                 sys.stdout.flush()
                 line = self._editor.read()
+                if line is _LOCK_REQUEST:
+                    self._perform_lock("inactivity")
+                    continue
                 if line.strip():
                     self._execute(line)
+                if self._lock_pending:
+                    self._perform_lock(self._lock_reason)
         finally:
             sys.stdout.write("\033[r")
             self.shutdown()
@@ -1474,6 +1757,7 @@ class TetherShell:
             _cron.stop()
         except Exception:
             pass
+        self.jobs.shutdown()
         show_cursor()
         clear()
         w = shutil.get_terminal_size().columns

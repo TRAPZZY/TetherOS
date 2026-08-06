@@ -1,0 +1,56 @@
+name: TetherOS image gates
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/advanced-shell-security]
+    paths:
+      - "app/**"
+      - "buildroot-external-tether/**"
+      - "scripts/build-distro.sh"
+      - "scripts/qemu-smoke.py"
+      - ".github/workflows/build-images.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        edition: [core, desktop]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/buildroot-2025.02.16/dl
+          key: buildroot-2025.02.16-${{ matrix.edition }}-${{ hashFiles('buildroot-external-tether/**', 'scripts/build-distro.sh') }}
+          restore-keys: |
+            buildroot-2025.02.16-${{ matrix.edition }}-
+            buildroot-2025.02.16-
+      - name: Build ${{ matrix.edition }} image
+        env:
+          TETHER_EDITION: ${{ matrix.edition }}
+        run: bash scripts/build-distro.sh
+      - name: Verify edition marker
+        run: test "$(cat "$HOME/buildroot-2025.02.16/output/images/tether-os.edition")" = "${{ matrix.edition }}"
+      - name: Boot image and exercise login/lock contracts
+        run: |
+          python -m pip install pexpect
+          python scripts/qemu-smoke.py \
+            "$HOME/buildroot-2025.02.16/output/images/tether-os.iso" \
+            --edition "${{ matrix.edition }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tether-os-${{ matrix.edition }}
+          path: |
+            ~/buildroot-2025.02.16/output/images/tether-os.iso
+            ~/buildroot-2025.02.16/output/images/tether-os.edition
+          if-no-files-found: error
+          retention-days: 14

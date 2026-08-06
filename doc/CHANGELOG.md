@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.0.0rc1 (2026-08-06)
+
+### Tether Shell 2 and secure session foundation
+
+- Added the TRAP HUB Command Deck in terminal, JSON, and optional GTK forms.
+- Replaced root auto-login with a fixed non-root `tether` account, boot-time
+  password enrollment, and standard `getty`/`login` authentication.
+- Added manual and inactivity locking backed by `vlock`, plus re-authentication
+  semantics for serial and graphical sessions.
+- Added typed command descriptors, lifecycle events, exit codes, command IDs,
+  detailed help, and machine-readable command discovery.
+- Added shell-free managed background jobs with bounded output, cancellation,
+  and wait/status commands.
+- Redacted credential-shaped arguments from history and session logs and
+  stopped persisting sensitive command output.
+- Added a narrow root-owned power broker instead of arbitrary `sudo` or `su`.
+- Upgraded the reproducible image builder to checksum-pinned Buildroot
+  2025.02.16 LTS with Core and Desktop editions.
+- Added Python 3.11/3.12 quality gates, both-edition image builds, and QEMU
+  authentication/lock smoke tests in GitHub Actions.
+
 ## v1.1.2 (2026-08-05)
 
 ### Production stabilization

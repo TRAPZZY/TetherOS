@@ -1,40 +1,13 @@
 #!/bin/sh
-# Tether OS -- PID 1 (bulletproof)
-# NO set -e -- PID 1 must NEVER exit (kernel panics if we do)
+# TetherOS boot handoff. BusyBox init remains PID 1 and owns all sessions.
 
-mount -t proc none /proc 2>/dev/null || true
-
-if ! /etc/init.d/rcS 2>/dev/null; then
-    echo "init: rcS error, continuing..." > /dev/console 2>/dev/null
-fi
-
-mknod /dev/console c 5 1 2>/dev/null || true
-mkdir -p /home/tether 2>/dev/null || true
-stty sane < /dev/console 2>/dev/null || true
-
-export HOME=/root
-export TERM=linux
 export TETHER_BOOT_IMAGE=1
-cd /home/tether 2>/dev/null || true
+export TRAP_HUB_SESSION=1
 
-echo "[OK] Tether OS v1.1.2 -- starting TRAP HUB..." > /dev/console 2>/dev/null
+exec /sbin/init
 
-while true; do
-    if [ -x /usr/bin/tether ]; then
-        /usr/bin/tether < /dev/console > /dev/console 2>&1
-        SHELL_STATUS=$?
-        case "$SHELL_STATUS" in
-            64) poweroff -f ;;
-            65) reboot -f ;;
-            *)
-                echo "init: Tether shell exited; restarting..." > /dev/console 2>/dev/null
-                sleep 1
-                ;;
-        esac
-    else
-        echo "init: /usr/bin/tether not found" > /dev/console 2>/dev/null
-        echo "init: Rescue shell (exit to retry)." > /dev/console 2>/dev/null
-        /bin/sh < /dev/console > /dev/console 2>&1
-    fi
-    stty sane < /dev/console 2>/dev/null || true
+# Never expose an unauthenticated rescue shell in a production image.
+echo "FATAL: unable to start the TetherOS service supervisor" > /dev/console
+while :; do
+    sleep 60
 done

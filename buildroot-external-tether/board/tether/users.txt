@@ -1,0 +1,2 @@
+# username uid group gid password home shell groups comment
+tether 1000 tether 1000 * /home/tether /usr/bin/tether-session video,input,render TRAP_HUB_operator

@@ -1,0 +1,59 @@
+#!/bin/sh
+# Supervise the optional Weston session and hand locks to trusted vlock.
+set -u
+
+if ! command -v weston >/dev/null 2>&1; then
+    echo "TRAP HUB desktop dependencies are unavailable; starting Core."
+    exec /usr/bin/tether
+fi
+
+export XDG_RUNTIME_DIR=/run/user/1000
+export GDK_BACKEND=wayland
+export NO_AT_BRIDGE=1
+
+PID_FILE="$XDG_RUNTIME_DIR/trap-hub-desktop.pid"
+LOCK_REQUEST="$XDG_RUNTIME_DIR/trap-hub-lock"
+weston_pid=""
+
+cleanup() {
+    rm -f "$PID_FILE" "$LOCK_REQUEST"
+    if [ -n "$weston_pid" ]; then
+        kill "$weston_pid" 2>/dev/null || true
+    fi
+}
+
+request_lock() {
+    : > "$LOCK_REQUEST"
+    if [ -n "$weston_pid" ]; then
+        kill "$weston_pid" 2>/dev/null || true
+    fi
+}
+
+trap request_lock USR1
+trap cleanup EXIT INT TERM HUP
+printf '%s\n' "$$" > "$PID_FILE"
+chmod 0600 "$PID_FILE"
+
+while :; do
+    rm -f "$LOCK_REQUEST"
+    weston --tty=1 --config=/etc/xdg/weston/weston.ini &
+    weston_pid="$!"
+    wait "$weston_pid" || true
+    weston_pid=""
+
+    if [ -f "$LOCK_REQUEST" ]; then
+        rm -f "$LOCK_REQUEST"
+        if ! command -v vlock >/dev/null 2>&1; then
+            echo "TRAP HUB cannot lock securely because vlock is unavailable."
+            exit 1
+        fi
+        vlock -a </dev/tty1 >/dev/tty1 2>&1 || {
+            echo "TRAP HUB trusted lock failed; ending the desktop session."
+            exit 1
+        }
+        continue
+    fi
+
+    echo "TRAP HUB desktop ended; starting Core."
+    exec /usr/bin/tether
+done

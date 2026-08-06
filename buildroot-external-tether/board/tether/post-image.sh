@@ -21,12 +21,18 @@ cd "$OLDPWD"
 cp "$ISOLINUX_BIN" "$ISO_DIR/isolinux/"
 cp "$LDLINUX_C32" "$ISO_DIR/isolinux/"
 
-cat > "$ISO_DIR/isolinux/syslinux.cfg" << 'CFG'
+if [ "${TETHER_EDITION:-core}" = "desktop" ]; then
+    BOOT_ARGS="console=ttyS0 console=tty1 net.ifnames=0 vt.global_cursor_default=0"
+else
+    BOOT_ARGS="console=ttyS0 console=tty1 nomodeset net.ifnames=0"
+fi
+
+cat > "$ISO_DIR/isolinux/syslinux.cfg" << CFG
 DEFAULT tether
 LABEL tether
     LINUX /bzImage
     INITRD /rootfs.cpio.gz
-    APPEND console=ttyS0 console=tty1 nomodeset net.ifnames=0
+    APPEND $BOOT_ARGS
 CFG
 
 xorriso -as mkisofs \
@@ -41,3 +47,4 @@ rm -rf "$ISO_DIR"
 
 ISO_SIZE=$(du -sh "$BINARIES_DIR/tether-os.iso" | cut -f1)
 echo "  [ISO] tether-os.iso ($ISO_SIZE) ready at $BINARIES_DIR/tether-os.iso"
+printf '%s\n' "${TETHER_EDITION:-core}" > "$BINARIES_DIR/tether-os.edition"

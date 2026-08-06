@@ -1,0 +1,51 @@
+#!/bin/sh
+# Minimal root broker: accepts only poweroff and reboot from the tether group.
+set -u
+
+STATE_DIR=/run/tether
+CONTROL_PIPE="$STATE_DIR/control"
+PID_FILE="$STATE_DIR/control.pid"
+
+start_broker() {
+    mkdir -p "$STATE_DIR"
+    chown root:tether "$STATE_DIR"
+    chmod 0750 "$STATE_DIR"
+    rm -f "$CONTROL_PIPE"
+    mkfifo "$CONTROL_PIPE"
+    chown root:tether "$CONTROL_PIPE"
+    chmod 0620 "$CONTROL_PIPE"
+
+    (
+        while :; do
+            if IFS= read -r action < "$CONTROL_PIPE"; then
+                case "$action" in
+                    poweroff)
+                        /sbin/poweroff -f
+                        ;;
+                    reboot)
+                        /sbin/reboot -f
+                        ;;
+                    *)
+                        echo "TRAP HUB broker rejected an unknown action" > /dev/console
+                        ;;
+                esac
+            fi
+        done
+    ) &
+    echo "$!" > "$PID_FILE"
+    echo "  [OK] TRAP HUB privilege broker ready."
+}
+
+stop_broker() {
+    if [ -r "$PID_FILE" ]; then
+        kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE" "$CONTROL_PIPE"
+}
+
+case "${1:-}" in
+    start) start_broker ;;
+    stop) stop_broker ;;
+    restart) stop_broker; start_broker ;;
+    *) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac

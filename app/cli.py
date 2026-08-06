@@ -130,6 +130,8 @@ class CLI:
             "tor_socks_port": config.tor_socks_port,
             "tor_control_port": config.tor_control_port,
             "tor_password_configured": bool(config.tor_password),
+            "lock_enabled": config.lock_enabled,
+            "lock_timeout_seconds": config.lock_timeout_seconds,
         }
         print(json.dumps(data, indent=2))
         return 0

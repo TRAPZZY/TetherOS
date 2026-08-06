@@ -10,7 +10,7 @@ $ErrorActionPreference = "Continue"
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  TETHER OS v1.1.2 -- Windows Installer" -ForegroundColor Cyan
+Write-Host "  TETHER OS v2.0.0rc1 -- Windows Installer" -ForegroundColor Cyan
 Write-Host "  by Trapzzy" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""

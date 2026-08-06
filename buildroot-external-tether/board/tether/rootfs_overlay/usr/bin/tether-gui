@@ -1,0 +1,4 @@
+#!/bin/sh
+export PYTHONPATH=/usr/lib/tether-os${PYTHONPATH:+:${PYTHONPATH}}
+cd /usr/lib/tether-os
+exec python3 -m app.gui

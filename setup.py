@@ -28,7 +28,7 @@ setup(
         "pysocks>=1.7.1",
     ],
     extras_require={
-        "dev": ["pytest"],
+        "dev": ["pytest", "pexpect; platform_system != 'Windows'"],
         "background": ["python-daemon>=2.3.0"],
         "ssh": ["paramiko>=2.12.0"],
     },

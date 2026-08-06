@@ -1,4 +1,4 @@
-TETHER_OS_VERSION = 1.1.2
+TETHER_OS_VERSION = 2.0.0rc1
 TETHER_OS_SITE_METHOD = local
 TETHER_OS_SITE = $(BR2_EXTERNAL_TETHER_OS_PATH)/../
 
@@ -14,7 +14,7 @@ define TETHER_OS_INSTALL_TARGET_CMDS
     printf '%s\n' '#!/bin/sh' \
         'export PYTHONPATH=/usr/lib/tether-os$${PYTHONPATH:+:$${PYTHONPATH}}' \
         'cd /usr/lib/tether-os' \
-        'exec python3 -m app.shell "$$@"' \
+        'exec python3 -m app.entrypoint "$$@"' \
         > $(TARGET_DIR)/usr/bin/tether
     chmod +x $(TARGET_DIR)/usr/bin/tether
 endef

@@ -19,10 +19,11 @@ class ParsedLine:
     commands: List[CommandSpec]
     redirect_path: Optional[str] = None
     append: bool = False
+    background: bool = False
 
 
 def parse_line(line: str) -> ParsedLine:
-    lexer = shlex.shlex(line, posix=True, punctuation_chars="|>")
+    lexer = shlex.shlex(line, posix=True, punctuation_chars="|>&")
     lexer.whitespace_split = True
     lexer.commenters = ""
     try:
@@ -36,6 +37,7 @@ def parse_line(line: str) -> ParsedLine:
     command_tokens = [[]]
     redirect_path = None
     append = False
+    background = False
     index = 0
     while index < len(tokens):
         token = tokens[index]
@@ -55,6 +57,14 @@ def parse_line(line: str) -> ParsedLine:
             append = token == ">>"
             if index + 1 != len(tokens):
                 raise ShellSyntaxError("output redirect must be the final operation")
+        elif token == "&":
+            if index + 1 != len(tokens):
+                raise ShellSyntaxError("background marker must be the final operation")
+            if not command_tokens[-1]:
+                raise ShellSyntaxError("missing command before background marker")
+            background = True
+        elif "&" in token:
+            raise ShellSyntaxError(f"unsupported operator: {token}")
         else:
             command_tokens[-1].append(token)
         index += 1
@@ -66,4 +76,5 @@ def parse_line(line: str) -> ParsedLine:
         commands=[CommandSpec(argv=argv) for argv in command_tokens],
         redirect_path=redirect_path,
         append=append,
+        background=background,
     )

@@ -1,0 +1,7 @@
+*.sh text eol=lf
+buildroot-external-tether/board/tether/rootfs_overlay/init text eol=lf
+buildroot-external-tether/board/tether/rootfs_overlay/etc/inittab text eol=lf
+buildroot-external-tether/board/tether/rootfs_overlay/etc/init.d/* text eol=lf
+buildroot-external-tether/board/tether/rootfs_overlay/usr/bin/tether* text eol=lf
+buildroot-external-tether/board/tether/*.config text eol=lf
+buildroot-external-tether/board/tether/*.fragment text eol=lf
