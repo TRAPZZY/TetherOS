@@ -13,6 +13,15 @@ def test_buildroot_external_tree_has_valid_identity_and_package_include():
     assert "package/*/*.mk" in external_mk
 
 
+def test_local_package_site_is_canonical_and_has_no_trailing_slash():
+    package = (
+        ROOT / "buildroot-external-tether" / "package" / "tether-os" /
+        "tether-os.mk"
+    ).read_text()
+    assert "TETHER_OS_SITE = $(realpath $(BR2_EXTERNAL_TETHER_OS_PATH)/..)" in package
+    assert "BR2_EXTERNAL_TETHER_OS_PATH)/../" not in package
+
+
 def test_boot_launcher_preserves_shell_exit_code():
     launcher = (
         ROOT / "buildroot-external-tether" / "board" / "tether" /

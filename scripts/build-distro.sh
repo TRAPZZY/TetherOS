@@ -106,16 +106,16 @@ sed -i 's/BR2_TARGET_GENERIC_GETTY_BAUDRATE=".*"/BR2_TARGET_GENERIC_GETTY_BAUDRA
 sed -i 's/BR2_TARGET_ROOTFS_EXT2_SIZE=".*"/BR2_TARGET_ROOTFS_EXT2_SIZE="500M"/' "$CFG"
 
 # Enable Python 3
-grep -q 'BR2_PACKAGE_PYTHON3=y' "$CFG" || echo 'BR2_PACKAGE_PYTHON3=y' >> "$CFG"
-grep -q 'BR2_PACKAGE_PYTHON3_SSL=y' "$CFG" || echo 'BR2_PACKAGE_PYTHON3_SSL=y' >> "$CFG"
-grep -q 'BR2_PACKAGE_PYTHON_PYSOCKS=y' "$CFG" || echo 'BR2_PACKAGE_PYTHON_PYSOCKS=y' >> "$CFG"
+enable_config BR2_PACKAGE_PYTHON3
+enable_config BR2_PACKAGE_PYTHON3_SSL
+enable_config BR2_PACKAGE_PYTHON_PYSOCKS
 
 # Enable Tor
-grep -q 'BR2_PACKAGE_TOR=y' "$CFG" || echo 'BR2_PACKAGE_TOR=y' >> "$CFG"
+enable_config BR2_PACKAGE_TOR
 
 # Enable iptables
-grep -q 'BR2_PACKAGE_IPTABLES=y' "$CFG" || echo 'BR2_PACKAGE_IPTABLES=y' >> "$CFG"
-grep -q 'BR2_PACKAGE_TETHER_OS=y' "$CFG" || echo 'BR2_PACKAGE_TETHER_OS=y' >> "$CFG"
+enable_config BR2_PACKAGE_IPTABLES
+enable_config BR2_PACKAGE_TETHER_OS
 
 if [ "$TETHER_EDITION" = "desktop" ]; then
     echo "[GUI] Enabling the measured Weston/GTK feasibility edition..."
