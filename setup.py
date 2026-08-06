@@ -2,10 +2,24 @@
 Cross-platform deployment via pip.
 """
 
+import ast
 from glob import glob
+from pathlib import Path
 from setuptools import find_packages, setup
 
-from app.version import __version__
+
+def read_version():
+    """Read version metadata without importing the package during builds."""
+    version_file = Path(__file__).parent / "app" / "version.py"
+    for line in version_file.read_text(encoding="utf-8").splitlines():
+        if line.startswith("__version__ ="):
+            value = ast.literal_eval(line.split("=", 1)[1].strip())
+            if isinstance(value, str) and value:
+                return value
+    raise RuntimeError(f"Unable to read __version__ from {version_file}")
+
+
+__version__ = read_version()
 
 setup(
     name="tether-os",

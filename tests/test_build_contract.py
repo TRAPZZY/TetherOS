@@ -33,12 +33,15 @@ def test_buildroot_is_pinned_to_supported_lts_and_verified():
 
 def test_release_version_has_one_authoritative_python_source():
     builder = (ROOT / "scripts" / "build-distro.sh").read_text()
+    setup = (ROOT / "setup.py").read_text()
     package = (
         ROOT / "buildroot-external-tether" / "package" / "tether-os" /
         "tether-os.mk"
     ).read_text()
     assert __version__ == "2.0.0rc1"
     assert "app/version.py" in builder
+    assert "from app.version import" not in setup
+    assert '"app" / "version.py"' in setup
     assert f"TETHER_OS_VERSION = {__version__}" in package
 
 
