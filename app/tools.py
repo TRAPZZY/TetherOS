@@ -9,6 +9,8 @@ import time
 import shutil
 import struct
 
+from lib.network import open_url
+
 
 class Tools:
     @staticmethod
@@ -17,11 +19,9 @@ class Tools:
         test_domains = ["https://httpbin.org/ip", "https://ifconfig.me/ip"]
         for url in test_domains:
             try:
-                import urllib.request
-                req = urllib.request.Request(url)
-                resp = urllib.request.urlopen(req, timeout=10)
-                ip = resp.read().decode().strip()
-                results.append({"url": url, "ip": ip, "leak": False})
+                with open_url(url, timeout=10) as resp:
+                    payload = resp.read().decode().strip()
+                results.append({"url": url, "ip": payload, "leak": False, "transport": "tor"})
             except Exception as e:
                 results.append({"url": url, "error": str(e), "leak": True})
         return results
@@ -42,14 +42,8 @@ class Tools:
         except Exception:
             status["control_port"] = False
         try:
-            import urllib.request
-            proxy = urllib.request.ProxyHandler({
-                "http": "socks5://127.0.0.1:9050",
-                "https": "socks5h://127.0.0.1:9050",
-            })
-            opener = urllib.request.build_opener(proxy)
-            resp = opener.open("https://httpbin.org/ip", timeout=10)
-            ext_ip = resp.read().decode().strip()
+            with open_url("https://api.ipify.org", timeout=10) as resp:
+                ext_ip = resp.read().decode().strip()
             status["external_ip"] = ext_ip
             status["tor_working"] = True
         except Exception:
@@ -61,23 +55,16 @@ class Tools:
     def geo_lookup(ip=None):
         if not ip:
             try:
-                import urllib.request
-                proxy = urllib.request.ProxyHandler({
-                    "http": "socks5://127.0.0.1:9050",
-                    "https": "socks5h://127.0.0.1:9050",
-                })
-                opener = urllib.request.build_opener(proxy)
-                resp = opener.open("https://httpbin.org/ip", timeout=10)
-                ip = resp.read().decode().strip()
+                with open_url("https://api.ipify.org", timeout=10) as resp:
+                    ip = resp.read().decode().strip()
             except Exception:
                 return {"error": "Could not determine IP"}
         try:
-            import urllib.request
-            resp = urllib.request.urlopen(
+            with open_url(
                 f"http://ip-api.com/json/{ip}?fields=query,country,regionName,city,isp,org,as,mobile,proxy,hosting",
-                timeout=10
-            )
-            return json.loads(resp.read().decode())
+                timeout=10,
+            ) as resp:
+                return json.loads(resp.read().decode())
         except Exception as e:
             return {"error": str(e)}
 
@@ -137,10 +124,9 @@ class Tools:
         result = {}
         test_url = "https://httpbin.org/bytes/1024"
         try:
-            import urllib.request
             start = time.time()
-            resp = urllib.request.urlopen(test_url, timeout=15)
-            data = resp.read()
+            with open_url(test_url, timeout=15) as resp:
+                data = resp.read()
             elapsed = time.time() - start
             size_kb = len(data) / 1024
             speed = size_kb / elapsed if elapsed > 0 else 0
@@ -154,11 +140,20 @@ class Tools:
     @staticmethod
     def kill_switch(state=None):
         if sys.platform == "win32":
-            return {"error": "Kill switch not supported on Windows"}
-        if state is True:
-            os.environ["TETHER_KILLSWITCH"] = "1"
-            return {"status": "enabled"}
-        elif state is False:
-            os.environ.pop("TETHER_KILLSWITCH", None)
-            return {"status": "disabled"}
-        return {"status": "enabled" if os.environ.get("TETHER_KILLSWITCH") else "disabled"}
+            return {"error": "The kernel kill switch is only available inside the Tether OS Linux image"}
+        script = "/etc/init.d/S01iptables"
+        if state is not None:
+            if not os.path.isfile(script):
+                return {"error": "Tether OS firewall service is not installed on this host"}
+            action = "start" if state else "stop"
+            result = subprocess.run([script, action], capture_output=True, text=True, timeout=15)
+            if result.returncode != 0:
+                return {"error": result.stderr.strip() or result.stdout.strip() or "firewall command failed"}
+        try:
+            result = subprocess.run(
+                ["iptables", "-S", "OUTPUT"], capture_output=True, text=True, timeout=5
+            )
+            enabled = result.returncode == 0 and "-P OUTPUT DROP" in result.stdout
+            return {"status": "enabled" if enabled else "disabled"}
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return {"error": "iptables is unavailable"}

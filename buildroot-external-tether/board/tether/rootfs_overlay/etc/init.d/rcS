@@ -1,6 +1,6 @@
 #!/bin/sh
 # Tether OS boot sequence
-echo "Tether OS v1.1.0 -- booting..."
+echo "Tether OS v1.1.2 -- booting..."
 
 # Mount kernel filesystems
 mount -t proc none /proc

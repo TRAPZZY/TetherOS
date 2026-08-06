@@ -5,7 +5,7 @@ import sys
 from unittest.mock import patch, MagicMock
 from lib.network import (
     set_proxy, unset_proxy, get_os,
-    check_port, detect_tor_browser, detect_system_tor,
+    check_port, create_connection, detect_tor_browser, detect_system_tor,
 )
 
 
@@ -78,3 +78,13 @@ class TestNetwork:
         mock_check_port.return_value = False
         result = detect_system_tor()
         assert result["detected"] is False
+
+    @patch("lib.network.socks.socksocket")
+    def test_tor_connection_uses_remote_dns(self, mock_socket_cls):
+        sock = MagicMock()
+        mock_socket_cls.return_value = sock
+        result = create_connection("example.com", 443, proxy_host="127.0.0.1", proxy_port=9050)
+        assert result is sock
+        sock.set_proxy.assert_called_once()
+        assert sock.set_proxy.call_args.kwargs["rdns"] is True
+        sock.connect.assert_called_once_with(("example.com", 443))

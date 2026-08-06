@@ -1,7 +1,10 @@
 SOCKSPort 9050
 ControlPort 9051
+CookieAuthentication 1
+CookieAuthFile /run/tor/control.authcookie
+CookieAuthFileGroupReadable 1
 DataDirectory /var/lib/tor
-User root
+User tor
 Log notice file /var/log/tor/notices.log
 Log warn syslog
 AvoidDiskWrites 1

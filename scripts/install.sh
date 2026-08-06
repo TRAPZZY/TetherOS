@@ -41,9 +41,6 @@ fi
 pip3 install --user -e "$(dirname "$(dirname "$0")")" 2>/dev/null || \
     pip3 install --user tether-os
 
-# 5. Create symlinks
-ln -sf "${TETHER_ROOT}/bin/tether" "${HOME}/.local/bin/tether" 2>/dev/null || true
-ln -sf "${TETHER_ROOT}/bin/tetherd" "${HOME}/.local/bin/tetherd" 2>/dev/null || true
-
 echo "[TETHER] Install complete!"
+echo "[TETHER] Console scripts were installed to your Python user bin directory."
 echo "[TETHER] Run 'tether check' to verify, then 'tetherd' to start."

@@ -15,6 +15,8 @@ from lib.network import (
     detect_tor_browser, detect_system_tor,
 )
 from lib.pidfile import is_running, stop_daemon, read_state
+from app.config import load_config
+from app.version import __version__
 
 
 class CLI:
@@ -25,7 +27,7 @@ class CLI:
         )
         self.parser.add_argument(
             "--version", action="version",
-            version="Tether OS 1.0.0 by Trapzzy",
+            version=f"Tether OS {__version__} by Trapzzy",
         )
         self._sub = self.parser.add_subparsers(dest="command")
 
@@ -97,10 +99,10 @@ class CLI:
                 return 1
             with daemon_mod.DaemonContext():
                 from app.daemon import main
-                main()
+                main(interval=args.interval)
         else:
             from app.daemon import main
-            main()
+            main(interval=args.interval)
         return 0
 
     def cmd_stop(self, args):
@@ -119,16 +121,17 @@ class CLI:
         return 0 if ip else 1
 
     def cmd_config(self, args):
-        path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "etc", "tether.conf",
-        )
-        try:
-            with open(path) as f:
-                print(f.read())
-        except FileNotFoundError:
-            print(f"[TETHER] Config not found at {path}")
-            return 1
+        config = load_config()
+        data = {
+            "version": __version__,
+            "rotation_interval": config.rotation_interval,
+            "auto_rotate": config.auto_rotate,
+            "tor_host": config.tor_host,
+            "tor_socks_port": config.tor_socks_port,
+            "tor_control_port": config.tor_control_port,
+            "tor_password_configured": bool(config.tor_password),
+        }
+        print(json.dumps(data, indent=2))
         return 0
 
     def cmd_check(self, args):
@@ -194,6 +197,10 @@ class CLI:
         return 0
 
 
-def main():
+def main(argv=None):
     cli = CLI()
-    sys.exit(cli.run())
+    return cli.run(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

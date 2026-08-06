@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import patch
 from app.cli import CLI
+from app.entrypoint import main as entrypoint_main
 
 
 class TestCLI:
@@ -29,3 +30,15 @@ class TestCLI:
         cli = CLI()
         with pytest.raises(SystemExit):
             cli.run(["--version"])
+
+
+def test_entrypoint_routes_cli_commands():
+    with patch("app.cli.CLI.run", return_value=7) as run:
+        assert entrypoint_main(["status"]) == 7
+    run.assert_called_once_with(["status"])
+
+
+def test_entrypoint_routes_interactive_mode():
+    with patch("app.shell.main", return_value=0) as shell_main:
+        assert entrypoint_main([]) == 0
+    shell_main.assert_called_once_with()

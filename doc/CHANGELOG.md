@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.1.2 (2026-08-05)
+
+### Production stabilization
+
+- Rebuilt shell parsing and execution around `shlex`, with real pipelines, virtual-filesystem redirection, cycle-safe aliases, and argument-vector subprocess execution.
+- Added virtual-filesystem persistence, recursive directory rename, ownership and permission operations, correct disk usage, and glob-based `find` behavior.
+- Connected the cron daemon and automatic identity-rotation scheduler to the live shell lifecycle.
+- Replaced direct or simulated network paths with shared SOCKS5h transports and Tor-routed HTTP/HTTPS/DNS operations.
+- Hardened Tor control authentication, multiline replies, circuit-change verification, daemon startup, and runtime configuration loading.
+- Replaced simulated kill-switch state with a fail-closed Buildroot firewall restricted to the Tor service account.
+- Removed absolute or fabricated anonymity claims; protected status is now shown only after Tor control and egress verification.
+- Repaired the Buildroot external-tree registration, package inclusion, launcher path, target dependencies, and ISO build workflow.
+- Unified the CLI, interactive shell, installed launcher, and boot-image entry point on version 1.1.2.
+- Added entry-point, shell parser, execution engine, configuration, virtual filesystem, and Buildroot contract tests. The suite now contains 96 passing tests.
+
 ## v1.1.1 (2026-07-16)
 
 ### Scroll Region Terminal UI

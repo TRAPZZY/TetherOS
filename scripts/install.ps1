@@ -10,7 +10,7 @@ $ErrorActionPreference = "Continue"
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  TETHER OS v1.1.0 -- Windows Installer" -ForegroundColor Cyan
+Write-Host "  TETHER OS v1.1.2 -- Windows Installer" -ForegroundColor Cyan
 Write-Host "  by Trapzzy" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
@@ -137,7 +137,7 @@ try {
 $launcher = "$TetherRoot\bin\tether.cmd"
 @"
 @echo off
-python "%~dp0..\..\..\..\Projects\TetherOS\bin\tether" %*
+python "$ProjectRoot\bin\tether" %*
 "@ | Out-File -FilePath "$TetherRoot\bin\tether.cmd" -Encoding ASCII
 
 Write-Host ""

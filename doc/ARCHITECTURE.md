@@ -1,6 +1,7 @@
 # Tether OS Architecture
 
-**Version:** 1.1.1  
+**Version:** 1.1.2
+
 **Author:** Trapzzy  
 **Design Philosophy:** Unix-inspired — do one thing well, compose via pipes. Bootable from ISO, fits entirely in RAM.
 
@@ -42,7 +43,7 @@ rcS (runs via /init, not Busybox init)
   |
   |  for i in /etc/init.d/S*; do $i start; done
   |    S01iptables: Firewall kill switch
-  |      -F, default DROP, allow loopback + Tor ports + DNS + established
+  |      fail-closed DROP policy; only the Tor service account may egress
   |    S02network: DHCP on eth0
   |      ip link set eth0 up; udhcpc -i eth0 -q -n
   |    S03tor: Tor daemon
@@ -52,7 +53,7 @@ rcS (runs via /init, not Busybox init)
   v
 /init continues
   |  Launches /usr/bin/tether
-  |    exec python3 -m app.shell
+  |    sets the installed application path and calls app.entrypoint
   v
 Tether OS Shell (REPL)
 
@@ -101,7 +102,7 @@ buildroot-external-tether/
       etc/init.d/S03tor       # Tor daemon
       etc/tor/torrc           # Tor configuration
     kernel.config             # Kernel config fragment
-    post-build.sh             # Post-build: deploy app, install deps, create /init
+    post-build.sh             # Post-build: trim tests and normalize permissions
     post-image.sh             # Post-image: build ISOLINUX ISO with xorriso
   configs/
     tether_os_defconfig       # Saved Buildroot .config
@@ -155,9 +156,9 @@ Multi-stage animated boot:
 1. **splash_screen()** — Dark screen, hacker frame, pulsing "TARGET ACQUIRED"
 2. **matrix_rain()** — Green digital rain
 3. **TRAP_HUB_LOGO** — ASCII art logo
-4. **Boot messages** — Anti-forensic module loading
-5. **Tor handshake** — 3-hop relay status, exit node, circuit latency
-6. **type_text()** — "YOUR CONNECTION IS NOW ANONYMIZED"
+4. **Boot messages** — Runtime component initialization
+5. **Tor status** — Reports that the shell is ready for verification
+6. **type_text()** — Directs the user to verify protected status
 
 ### app/theme.py — Theme Engine
 
@@ -211,11 +212,11 @@ through Tor SOCKS5 proxy to verify current public IP. Multiple fallbacks.
 ### kernel/rotator.py
 
 Orchestrator combining torctl + probe:
-1. `probe.get_current_ip()` — record old IP
+1. `probe.get_current_ip()` — record the verified old Tor egress IP
 2. `torctl.newnym()` — SIGNAL NEWNYM
-3. Wait 3 seconds
-4. `probe.get_current_ip()` — record new IP
-5. Compare: if different, success
+3. Poll within a bounded timeout
+4. `probe.get_current_ip()` — record the verified new Tor egress IP
+5. Report success only when the egress address changes
 
 ### kernel/scheduler.py
 
@@ -263,9 +264,9 @@ socks_port = 9050
 
 ## Security Model
 
-- All traffic routes through Tor SOCKS5 proxy (127.0.0.1:9050)
-- iptables kill switch blocks all non-Tor traffic at kernel level
-- DNS resolved through Tor (SOCKS5 remote resolution)
+- Application network commands use Tor SOCKS5 with remote DNS resolution.
+- The boot image applies a fail-closed iptables policy and permits external traffic only for the Tor service account.
+- Protected status requires both control-port authentication and a successful Tor egress verification.
 - Multiple fallback IP verification services
 - Boots entirely in RAM — no persistent storage
 
@@ -291,4 +292,4 @@ socks_port = 9050
 
 ## Test Coverage
 
-76 tests across all subsystems.
+96 tests cover the control layer, network adapters, command modules, shell parser and execution engine, virtual filesystem, configuration, and Buildroot integration contracts.

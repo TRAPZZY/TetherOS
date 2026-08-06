@@ -3,8 +3,13 @@
 case "$1" in
     start)
         echo "  [OK] Starting Tor..."
-        mkdir -p /var/log/tor /var/lib/tor
-        chmod 700 /var/lib/tor
+        mkdir -p /var/log/tor /var/lib/tor /run/tor
+        chown -R tor:tor /var/log/tor /var/lib/tor /run/tor
+        chmod 700 /var/lib/tor /run/tor
+        if ! tor --verify-config -f /etc/tor/torrc >/dev/null 2>&1; then
+            echo "  [FAIL] Tor configuration is invalid"
+            exit 1
+        fi
         tor -f /etc/tor/torrc &
         ;;
     stop)

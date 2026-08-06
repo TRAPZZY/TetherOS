@@ -4,7 +4,10 @@ import os as real_os
 import shutil
 import stat
 import time
+import fnmatch
 from datetime import datetime
+
+from app.version import __version__
 
 
 class VirtualFS:
@@ -29,6 +32,7 @@ class VirtualFS:
             "/var":           {"type": "dir", "mode": "drwxr-xr-x"},
             "/var/log":       {"type": "dir", "mode": "drwxr-xr-x"},
             "/proc":          {"type": "dir", "mode": "dr-xr-xr-x"},
+            "/proc/net":      {"type": "dir", "mode": "dr-xr-xr-x"},
             "/dev":           {"type": "dir", "mode": "drwxr-xr-x"},
             "/dev/null":      {"type": "dev",  "mode": "crw-rw-rw-"},
             "/root":          {"type": "dir", "mode": "drwx------"},
@@ -43,10 +47,19 @@ class VirtualFS:
         for path, attrs in base.items():
             self._nodes[path] = {
                 **attrs,
+                "owner": "root",
+                "group": "root",
                 "mtime": now,
                 "size": 4096 if attrs["type"] == "dir" else 0,
                 "children": [] if attrs["type"] == "dir" else None,
             }
+
+        for path in base:
+            if path == "/":
+                continue
+            parent, name = self.split_path(path)
+            if parent in self._nodes:
+                self._nodes[parent]["children"].append(name)
 
         etc_files = {
             "/etc/hostname":    "trap-hub\n",
@@ -56,11 +69,12 @@ class VirtualFS:
             "/etc/shadow":      "root:!:19876:0:99999:7:::\n",
             "/etc/group":       "root:x:0:\nwheel:x:10:root\n",
             "/etc/fstab":       "# Tether OS virtual filesystem\nproc /proc proc defaults 0 0\n",
-            "/etc/os-release":  "NAME=\"Tether OS\"\nVERSION=\"1.1.0\"\nID=tether\nID_LIKE=arch\nPRETTY_NAME=\"Tether OS 1.1.0 (Trap Hub)\"\n",
+            "/etc/os-release":  f"NAME=\"Tether OS\"\nVERSION=\"{__version__}\"\nID=tether\nID_LIKE=buildroot\nPRETTY_NAME=\"Tether OS {__version__} (Trap Hub)\"\n",
         }
         for path, content in etc_files.items():
             self._nodes[path] = {
                 "type": "file", "mode": "-rw-r--r--",
+                "owner": "root", "group": "root",
                 "mtime": now, "size": len(content),
                 "content": content, "children": None,
             }
@@ -69,7 +83,7 @@ class VirtualFS:
                 self._nodes[parent]["children"].append(path.rsplit("/", 1)[1])
 
         proc_files = {
-            "/proc/version": "Tether OS version 1.0.0 (trap-hub@localhost) (gcc (GCC) 13.2.0) #1 SMP PREEMPT_DYNAMIC\n",
+            "/proc/version": f"Tether OS version {__version__} (Python shell runtime)\n",
             "/proc/cpuinfo": "processor\t: 0\nvendor_id\t: Trap Hub\nmodel name\t: Tether OS Virtual CPU\ncpu MHz\t\t: 2400.000\ncache size\t: 4096 KB\n",
             "/proc/meminfo": "MemTotal:       16248560 kB\nMemFree:         8932456 kB\nMemAvailable:   12345678 kB\nSwapTotal:       8388608 kB\nSwapFree:        8388608 kB\n",
             "/proc/uptime": "12345.67 67890.12\n",
@@ -80,6 +94,7 @@ class VirtualFS:
         for path, content in proc_files.items():
             self._nodes[path] = {
                 "type": "file", "mode": "-r--r--r--",
+                "owner": "root", "group": "root",
                 "mtime": now, "size": len(content),
                 "content": content, "children": None,
             }
@@ -154,6 +169,7 @@ class VirtualFS:
         is_new = p not in self._nodes
         self._nodes[p] = {
             "type": "file", "mode": "-rw-r--r--",
+            "owner": "root", "group": "root",
             "mtime": now, "size": len(content),
             "content": content, "children": None,
         }
@@ -171,6 +187,7 @@ class VirtualFS:
         now = datetime.now()
         self._nodes[p] = {
             "type": "dir", "mode": mode,
+            "owner": "root", "group": "root",
             "mtime": now, "size": 4096,
             "children": [],
         }
@@ -178,8 +195,25 @@ class VirtualFS:
             self._nodes[parent].setdefault("children", []).append(name)
         return True
 
+    def makedirs(self, path, mode="drwxr-xr-x"):
+        target = self.resolve(path)
+        if target == "/":
+            return True
+        current = ""
+        for part in target.strip("/").split("/"):
+            current += "/" + part
+            if self.exists(current):
+                if not self.is_dir(current):
+                    return False
+                continue
+            if not self.mkdir(current, mode=mode):
+                return False
+        return True
+
     def remove(self, path):
         p = self.resolve(path)
+        if p == "/":
+            return False
         if p not in self._nodes:
             return False
         if self._nodes[p]["type"] == "dir" and self._nodes[p].get("children"):
@@ -193,6 +227,8 @@ class VirtualFS:
 
     def rmtree(self, path):
         p = self.resolve(path)
+        if p == "/":
+            return False
         if p not in self._nodes:
             return False
         to_remove = [k for k in self._nodes if k == p or k.startswith(p + "/")]
@@ -215,6 +251,7 @@ class VirtualFS:
             return False
         self._nodes[p] = {
             "type": "file", "mode": "-rw-r--r--",
+            "owner": "root", "group": "root",
             "mtime": now, "size": 0,
             "content": "", "children": None,
         }
@@ -233,14 +270,50 @@ class VirtualFS:
         if dp in self._nodes:
             return False
         sparent, sname = self.split_path(sp)
-        self._nodes[dp] = self._nodes[sp]
+        moved = {
+            key: value
+            for key, value in self._nodes.items()
+            if key == sp or key.startswith(sp + "/")
+        }
+        for key in sorted(moved, key=len, reverse=True):
+            del self._nodes[key]
+        for key, value in moved.items():
+            new_key = dp + key[len(sp):]
+            self._nodes[new_key] = value
         self._nodes[dp]["mtime"] = datetime.now()
-        del self._nodes[sp]
         if sparent in self._nodes and self._nodes[sparent].get("children"):
             if sname in self._nodes[sparent]["children"]:
                 self._nodes[sparent]["children"].remove(sname)
         if dname not in self._nodes[dparent].get("children", []):
             self._nodes[dparent].setdefault("children", []).append(dname)
+        return True
+
+    def chmod(self, path, mode):
+        p = self.resolve(path)
+        if p not in self._nodes:
+            return False
+        if not isinstance(mode, str) or not mode.isdigit() or len(mode) not in (3, 4):
+            return False
+        digits = mode[-3:]
+        perms = ""
+        for digit in digits:
+            value = int(digit)
+            perms += "r" if value & 4 else "-"
+            perms += "w" if value & 2 else "-"
+            perms += "x" if value & 1 else "-"
+        prefix = "d" if self._nodes[p]["type"] == "dir" else "c" if self._nodes[p]["type"] == "dev" else "-"
+        self._nodes[p]["mode"] = prefix + perms
+        self._nodes[p]["mtime"] = datetime.now()
+        return True
+
+    def chown(self, path, owner, group=None):
+        p = self.resolve(path)
+        if p not in self._nodes or not owner:
+            return False
+        self._nodes[p]["owner"] = owner
+        if group:
+            self._nodes[p]["group"] = group
+        self._nodes[p]["mtime"] = datetime.now()
         return True
 
     def stat(self, path):
@@ -260,18 +333,15 @@ class VirtualFS:
                 yield from self.walk(cpath)
 
     def du(self, path):
-        total = 0
         p = self.resolve(path)
         if p not in self._nodes:
             return 0
-        total += self._nodes[p].get("size", 0)
+        total = self._nodes[p].get("size", 0)
         if self._nodes[p]["type"] == "dir":
             for child in self._nodes[p].get("children", []):
                 cpath = p.rstrip("/") + "/" + child if p != "/" else "/" + child
                 if cpath in self._nodes:
-                    total += self._nodes[cpath].get("size", 0)
-                    if self._nodes[cpath]["type"] == "dir":
-                        total += self.du(cpath)
+                    total += self.du(cpath)
         return total
 
     def find(self, path, name):
@@ -282,8 +352,39 @@ class VirtualFS:
         if self._nodes[p]["type"] == "dir":
             for child in self._nodes[p].get("children", []):
                 cpath = p.rstrip("/") + "/" + child if p != "/" else "/" + child
-                if name in child:
+                if fnmatch.fnmatch(child, name):
                     results.append(cpath)
                 if cpath in self._nodes and self._nodes[cpath]["type"] == "dir":
                     results.extend(self.find(cpath, name))
         return results
+
+    def to_dict(self):
+        nodes = {}
+        for path, node in self._nodes.items():
+            item = dict(node)
+            if isinstance(item.get("mtime"), datetime):
+                item["mtime"] = item["mtime"].isoformat()
+            nodes[path] = item
+        return {"home": self._home, "cwd": self.cwd, "nodes": nodes}
+
+    def load_dict(self, state):
+        if not isinstance(state, dict) or not isinstance(state.get("nodes"), dict):
+            return False
+        nodes = {}
+        for path, node in state["nodes"].items():
+            if not isinstance(path, str) or not path.startswith("/") or not isinstance(node, dict):
+                return False
+            item = dict(node)
+            if isinstance(item.get("mtime"), str):
+                try:
+                    item["mtime"] = datetime.fromisoformat(item["mtime"])
+                except ValueError:
+                    item["mtime"] = datetime.now()
+            nodes[path] = item
+        if "/" not in nodes or nodes["/"].get("type") != "dir":
+            return False
+        self._nodes = nodes
+        self._home = state.get("home", "/home/root")
+        requested_cwd = state.get("cwd", self._home)
+        self.cwd = requested_cwd if requested_cwd in nodes and nodes[requested_cwd].get("type") == "dir" else self._home
+        return True

@@ -6,6 +6,7 @@ import re
 import asyncio
 import urllib.request
 import urllib.error
+import urllib.parse
 try:
     import ssl
     _HAVE_SSL = True
@@ -19,14 +20,22 @@ import os
 import sys
 import ipaddress
 
+from lib.network import create_connection, open_url
+
 _dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _get_wordlist(name):
-    path = os.path.join(_dir, "wordlists", name)
-    if os.path.isfile(path):
-        with open(path, errors="replace") as f:
-            return [l.strip() for l in f if l.strip() and not l.startswith("#")]
+    candidates = [
+        os.path.join(os.environ.get("TETHER_DATA_DIR", ""), "wordlists", name),
+        os.path.join(_dir, "wordlists", name),
+        os.path.join(sys.prefix, "share", "tether-os", "wordlists", name),
+        os.path.join("/usr/lib/tether-os", "wordlists", name),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            with open(path, errors="replace") as f:
+                return [l.strip() for l in f if l.strip() and not l.startswith("#")]
     return []
 
 
@@ -35,6 +44,17 @@ def _try_resolve(hostname):
         return socket.getaddrinfo(hostname, 0, socket.AF_INET)[0][4][0]
     except Exception:
         return None
+
+
+def _doh_query(hostname, record_type="A", timeout=10):
+    query = urllib.parse.urlencode({"name": hostname, "type": record_type})
+    request = urllib.request.Request(
+        f"https://dns.google/resolve?{query}",
+        headers={"Accept": "application/dns-json"},
+    )
+    with open_url(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload.get("Answer", [])
 
 
 def _color(c, text):
@@ -51,7 +71,7 @@ def _cmd_whois(args):
     domain = args[0]
     print(f"  Querying WHOIS for {domain}...")
     try:
-        s = socket.create_connection(("whois.iana.org", 43), timeout=10)
+        s = create_connection("whois.iana.org", 43, timeout=10, use_tor=True)
         s.sendall((domain + "\r\n").encode())
         data = b""
         while True:
@@ -72,7 +92,7 @@ def _cmd_whois(args):
 # ---- nmap ----
 
 def _cmd_nmap(args):
-    parser = {"ports": "1-1024", "tor": False, "sv": False, "os": False, "aggr": False}
+    parser = {"ports": "1-1024", "tor": True, "sv": False, "os": False, "aggr": False}
     targets = []
     i = 0
     while i < len(args):
@@ -82,6 +102,9 @@ def _cmd_nmap(args):
             i += 2
         elif a == "--tor":
             parser["tor"] = True
+            i += 1
+        elif a == "--direct":
+            parser["tor"] = False
             i += 1
         elif a == "-sV":
             parser["sv"] = True
@@ -118,18 +141,13 @@ def _cmd_nmap(args):
     print()
 
     for target in targets:
-        ip = _try_resolve(target) or target
+        ip = target if parser["tor"] else (_try_resolve(target) or target)
         print(f"  Host: {target} ({ip})")
         open_ports = []
 
         for port in port_list:
             try:
-                s = socket.socket()
-                s.settimeout(1.5)
-                if parser["tor"]:
-                    s.connect(("127.0.0.1", 9050))
-                else:
-                    s.connect((ip, port))
+                s = create_connection(ip, port, timeout=1.5, use_tor=parser["tor"])
                 s.close()
                 open_ports.append(port)
                 print(f"    PORT {port}/tcp  OPEN")
@@ -144,9 +162,7 @@ def _cmd_nmap(args):
             print(f"  Service detection on open ports:")
             for port in open_ports:
                 try:
-                    s = socket.socket()
-                    s.settimeout(2)
-                    s.connect((ip, port))
+                    s = create_connection(ip, port, timeout=2, use_tor=parser["tor"])
                     s.sendall(b"HEAD / HTTP/1.0\r\n\r\n")
                     banner = s.recv(256).decode("utf-8", errors="replace").strip()[:80]
                     print(f"    {ip}:{port} - {banner}")
@@ -158,9 +174,7 @@ def _cmd_nmap(args):
             print()
             print(f"  OS detection:")
             try:
-                s = socket.socket()
-                s.settimeout(2)
-                s.connect((ip, 80))
+                s = create_connection(ip, 80, timeout=2, use_tor=parser["tor"])
                 s.sendall(b"GET / HTTP/1.0\r\n\r\n")
                 resp = s.recv(1024).decode("utf-8", errors="replace")
                 if "Server:" in resp:
@@ -209,21 +223,10 @@ def _cmd_dnsrecon(args):
     if scan_type in ("std", "all"):
         for rtype in ("A", "AAAA", "MX", "NS", "TXT", "SOA"):
             try:
-                results = socket.getaddrinfo(domain, 0, socket.AF_UNSPEC, socket.SOCK_STREAM)
-                ips = set()
-                for r in results:
-                    ips.add(r[4][0])
-                for ip in sorted(ips):
-                    print(f"  {rtype:6} {domain:40} {ip}")
+                for answer in _doh_query(domain, rtype):
+                    print(f"  {rtype:6} {answer.get('name', domain):40} {answer.get('data', '?')}")
             except:
                 pass
-
-        try:
-            host, aliaslist, ipaddrlist = socket.gethostbyname_ex(domain)
-            for alias in aliaslist:
-                print(f"  CNAME  {alias}")
-        except:
-            pass
 
     if scan_type in ("brt", "all"):
         subdomains = _get_wordlist("subdomains.txt")
@@ -232,12 +235,15 @@ def _cmd_dnsrecon(args):
                 subdomains = [l.strip() for l in f if l.strip()]
         print(f"  Brute-forcing {len(subdomains)} subdomains...")
         found = 0
-        for sub in subdomains:
+        for sub in subdomains[:200]:
             fqdn = f"{sub}.{domain}"
-            ip = _try_resolve(fqdn)
-            if ip:
+            try:
+                answers = _doh_query(fqdn, "A", timeout=5)
+            except Exception:
+                answers = []
+            for answer in answers:
                 found += 1
-                print(f"  {fqdn:50} {ip}")
+                print(f"  {fqdn:50} {answer.get('data', '?')}")
         if found == 0:
             print(f"  No subdomains found via brute-force")
 
@@ -245,9 +251,8 @@ def _cmd_dnsrecon(args):
         for svc in ("_http._tcp", "_https._tcp", "_smtp._tcp", "_imap._tcp",
                      "_pop3._tcp", "_ldap._tcp", "_kerberos._tcp"):
             try:
-                results = socket.getaddrinfo(f"{svc}.{domain}", 0)
-                for r in results:
-                    print(f"  SRV    {svc}.{domain:35} {r[4][0]}")
+                for answer in _doh_query(f"{svc}.{domain}", "SRV"):
+                    print(f"  SRV    {svc}.{domain:35} {answer.get('data', '?')}")
             except:
                 pass
 
@@ -303,7 +308,7 @@ def _cmd_gobuster(args):
         full_url = f"{url}/{path}"
         try:
             req = urllib.request.Request(full_url, method="HEAD")
-            resp = urllib.request.urlopen(req, timeout=5, context=ctx)
+            resp = open_url(req, timeout=5, context=ctx)
             status = resp.status
             if status in (200, 204, 301, 302, 307, 403, 401, 500):
                 found += 1
@@ -364,7 +369,7 @@ def _cmd_theharvester(args):
         ctx = ssl._create_unverified_context()
         try:
             url = f"https://crt.sh/?q=%25.{domain}&output=json"
-            resp = urllib.request.urlopen(url, timeout=15, context=ctx)
+            resp = open_url(url, timeout=15, context=ctx)
             data = json.loads(resp.read().decode())
             for entry in data[:limit]:
                 name = entry.get("name_value", "")
@@ -382,10 +387,13 @@ def _cmd_theharvester(args):
         subs = _get_wordlist("subdomains.txt")[:200]
         for sub in subs:
             fqdn = f"{sub}.{domain}"
-            ip = _try_resolve(fqdn)
-            if ip and fqdn not in hosts:
+            try:
+                answers = _doh_query(fqdn, "A", timeout=5)
+            except Exception:
+                answers = []
+            if answers and fqdn not in hosts:
                 hosts.add(fqdn)
-                print(f"    HOST: {fqdn} -> {ip}")
+                print(f"    HOST: {fqdn} -> {answers[0].get('data', '?')}")
 
     if not hosts and not emails:
         print("  No results found.")
@@ -434,7 +442,7 @@ def _cmd_whatweb(args):
     ctx = ssl._create_unverified_context()
     try:
         req = urllib.request.Request(url, method="GET")
-        resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+        resp = open_url(req, timeout=10, context=ctx)
         headers = {k.lower(): v for k, v in resp.headers.items()}
         body = resp.read().decode("utf-8", errors="replace")[:5000]
         resp.close()
@@ -497,16 +505,20 @@ def _cmd_enum4linux(args):
     print()
 
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(3)
-        result = s.connect_ex((host, 445))
-        s.close()
+        try:
+            s = create_connection(host, 445, timeout=3, use_tor=True)
+            s.close()
+            result = 0
+        except OSError:
+            result = 1
 
         if result != 0:
-            s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s2.settimeout(3)
-            result = s2.connect_ex((host, 139))
-            s2.close()
+            try:
+                s2 = create_connection(host, 139, timeout=3, use_tor=True)
+                s2.close()
+                result = 0
+            except OSError:
+                result = 1
 
         if result != 0:
             print(f"  [!] No SMB ports open on {host} (445/tcp, 139/tcp)")
@@ -523,9 +535,7 @@ def _cmd_enum4linux(args):
 
         print(f"\n  [*] Checking OS fingerprint...")
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(5)
-            s.connect((host, 445))
+            s = create_connection(host, 445, timeout=5, use_tor=True)
             banner = s.recv(1024)
             s.close()
             if banner[:4] == b'\x00\x00\x00' and len(banner) > 36:
@@ -597,7 +607,7 @@ def _cmd_cewl(args):
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(url, headers={"User-Agent": "TRAP-HUB-CeWL/1.0"})
-        resp = urllib.request.urlopen(req, timeout=15, context=ctx)
+        resp = open_url(req, timeout=15, context=ctx)
         body = resp.read().decode("utf-8", errors="replace")
 
         words = re.findall(r'[a-zA-Z][a-zA-Z0-9_\-]{' + str(min_word - 1) + r',}', body)
@@ -648,8 +658,5 @@ def register(commands, aliases):
         "whois": _cmd_whois,
         "enum4linux": _cmd_enum4linux,
         "cewl": _cmd_cewl,
-    })
-    aliases.update({
-        "nmap": "nmap",
     })
     return commands, aliases

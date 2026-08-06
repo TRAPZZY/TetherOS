@@ -37,6 +37,19 @@ class TestTorCtl:
 
         sock.sendall.assert_called_once_with(b'AUTHENTICATE "hunter2"\r\n')
 
+    def test_authenticate_with_cookie(self, tmp_path):
+        cookie = bytes(range(32))
+        cookie_path = tmp_path / "control.authcookie"
+        cookie_path.write_bytes(cookie)
+        sock = MagicMock()
+        sock.recv.return_value = b"250 OK\r\n"
+
+        TorCtl(cookie_path=str(cookie_path))._authenticate(sock)
+
+        sock.sendall.assert_called_once_with(
+            f"AUTHENTICATE {cookie.hex()}\r\n".encode()
+        )
+
     @patch("kernel.torctl.socket.create_connection")
     def test_authenticate_fails(self, mock_conn):
         sock = MagicMock()

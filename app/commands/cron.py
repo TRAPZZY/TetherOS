@@ -49,20 +49,30 @@ class CronDaemon:
         self._thread = None
         self._running = False
         self._jobs = []
+        self._stop_event = threading.Event()
+
+    def attach_shell(self, shell):
+        self.shell = shell
 
     def start(self):
         if self._running:
-            return
+            return False
         self._running = True
+        self._stop_event.clear()
         self._jobs = _load()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+        return True
 
     def stop(self):
         self._running = False
+        self._stop_event.set()
+        if self._thread and self._thread is not threading.current_thread():
+            self._thread.join(timeout=2)
 
     def _run(self):
         while self._running:
+            self._jobs = _load()
             now = time.time()
             for job in self._jobs:
                 last = job.get("last_run", 0)
@@ -71,14 +81,19 @@ class CronDaemon:
                     job["last_run"] = now
                     self._execute_job(job)
             _save(self._jobs)
-            time.sleep(5)
+            self._stop_event.wait(5)
 
     def _execute_job(self, job):
         cmd = job.get("command", "")
         job_id = job.get("id", "?")
         print(f"\n  [CRON] Running job #{job_id}: {cmd}")
         if self.shell:
-            self.shell._execute(cmd)
+            try:
+                self.shell._execute(cmd, _from_script=True)
+            except Exception as exc:
+                print(f"  [CRON] Job #{job_id} failed: {exc}")
+        else:
+            print(f"  [CRON] Job #{job_id} skipped: no shell is attached")
 
 
 _cron = CronDaemon()
@@ -120,17 +135,26 @@ def _cmd_cron(args):
     elif sub == "add" and len(args) >= 3:
         cmd = args[1]
         interval = args[2]
+        try:
+            seconds = _parse_interval(interval)
+            if seconds < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            print("  Interval must be a positive value such as 30s, 5m, or 1h.")
+            return
         jobs = _load()
-        jobs.append({"id": len(jobs) + 1, "command": cmd, "interval": interval, "last_run": 0})
+        job_id = max((int(job.get("id", 0)) for job in jobs), default=0) + 1
+        jobs.append({"id": job_id, "command": cmd, "interval": interval, "last_run": time.time()})
         _save(jobs)
         print(f"  Added cron job: {cmd} every {interval}")
 
     elif sub == "del" and len(args) >= 2:
         try:
-            idx = int(args[1]) - 1
+            job_id = int(args[1])
             jobs = _load()
-            if 0 <= idx < len(jobs):
-                removed = jobs.pop(idx)
+            match = next((index for index, job in enumerate(jobs) if int(job.get("id", 0)) == job_id), None)
+            if match is not None:
+                removed = jobs.pop(match)
                 _save(jobs)
                 print(f"  Removed cron job #{args[1]}: {removed.get('command', '')}")
             else:
@@ -139,8 +163,10 @@ def _cmd_cron(args):
             print("  Usage: cron del <job-number>")
 
     elif sub == "start":
-        _cron.start()
-        print("  Cron daemon started.")
+        if _cron.start():
+            print("  Cron daemon started.")
+        else:
+            print("  Cron daemon is already running.")
 
     elif sub == "stop":
         _cron.stop()

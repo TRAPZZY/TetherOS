@@ -7,6 +7,8 @@ import random
 import re
 import time
 
+from lib.network import set_proxy, unset_proxy
+
 _dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -29,7 +31,7 @@ def _cmd_proxychains(args):
         return
 
     cmd = " ".join(args)
-    proxy = "socks5://127.0.0.1:9050"
+    proxy = "socks5h://127.0.0.1:9050"
     print(f"  Routing through Tor proxy {proxy}...")
     print(f"  Executing: {cmd}")
     print()
@@ -48,7 +50,7 @@ def _cmd_proxychains(args):
         r = subprocess.run(
             args,
             capture_output=True, text=True, timeout=30, env=env,
-            shell=True,
+            shell=False,
         )
         for line in r.stdout.split("\n"):
             print(f"  {line}")
@@ -94,21 +96,22 @@ def _get_mac_info():
 
 
 def _set_mac(adapter_name, new_mac):
+    safe_adapter = adapter_name.replace("'", "''")
     try:
         subprocess.run([
             "powershell", "-Command",
-            f"Disable-NetAdapter -Name '{adapter_name}' -Confirm:$false"
+            f"Disable-NetAdapter -Name '{safe_adapter}' -Confirm:$false"
         ], capture_output=True, timeout=10)
 
         subprocess.run([
             "powershell", "-Command",
-            f"Set-NetAdapterAdvancedProperty -Name '{adapter_name}' "
+            f"Set-NetAdapterAdvancedProperty -Name '{safe_adapter}' "
             f"-RegistryKeyword 'NetworkAddress' -RegistryValue '{new_mac}'"
         ], capture_output=True, timeout=10)
 
         subprocess.run([
             "powershell", "-Command",
-            f"Enable-NetAdapter -Name '{adapter_name}' -Confirm:$false"
+            f"Enable-NetAdapter -Name '{safe_adapter}' -Confirm:$false"
         ], capture_output=True, timeout=10)
         return True
     except:
@@ -155,7 +158,7 @@ def _cmd_macchanger(args):
 
     adapters = _get_mac_info()
     if not adapters:
-        print("  macchanger: no network adapters found")
+        print("  MAC changer: no network adapters found")
         print("  (requires PowerShell admin rights on Windows)")
         return
 
@@ -189,6 +192,9 @@ def _cmd_macchanger(args):
         target = _SAVED_MACS.get(adapter, current)
         action = "restoring original"
     elif new_mac:
+        if not re.fullmatch(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", new_mac):
+            print("  macchanger: invalid MAC address")
+            return
         target = new_mac
         action = "setting"
     else:
@@ -215,7 +221,10 @@ def _cmd_anonsurf(args):
     mode = args[0].lower() if args else "status"
 
     if mode == "start":
-        proxy = "socks5://127.0.0.1:9050"
+        proxy = "socks5h://127.0.0.1:9050"
+        set_proxy(http_proxy="127.0.0.1:8118", socks_proxy="127.0.0.1:9050")
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            os.environ[key] = proxy
         env_file = os.path.join(os.path.expanduser("~"), ".tether", "proxy.env")
         os.makedirs(os.path.dirname(env_file), exist_ok=True)
         with open(env_file, "w") as f:
@@ -239,6 +248,7 @@ def _cmd_anonsurf(args):
         env_file = os.path.join(os.path.expanduser("~"), ".tether", "proxy.env")
         if os.path.isfile(env_file):
             os.remove(env_file)
+        unset_proxy()
         print("  \033[33m[OK] Anonymous mode STOPPED\033[0m")
         print("  Proxy environment variables cleared")
 
@@ -279,9 +289,13 @@ def _cmd_anonsurf(args):
         env_file = os.path.join(os.path.expanduser("~"), ".tether", "proxy.env")
         if os.path.isfile(env_file):
             os.remove(env_file)
+            unset_proxy()
             print("  \033[33m[OK] Anonymous mode STOPPED\033[0m")
         else:
-            proxy = "socks5://127.0.0.1:9050"
+            proxy = "socks5h://127.0.0.1:9050"
+            set_proxy(http_proxy="127.0.0.1:8118", socks_proxy="127.0.0.1:9050")
+            for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+                os.environ[key] = proxy
             os.makedirs(os.path.dirname(env_file), exist_ok=True)
             with open(env_file, "w") as f:
                 f.write(f"HTTP_PROXY={proxy}\nHTTPS_PROXY={proxy}\nALL_PROXY={proxy}\n")
@@ -306,9 +320,6 @@ def register(commands, aliases):
         "anonsurf": _cmd_anonsurf,
     })
     aliases.update({
-        "proxychains": "proxychains",
-        "macchanger": "macchanger",
         "mac": "macchanger -s",
-        "anonsurf": "anonsurf",
     })
     return commands, aliases

@@ -13,6 +13,8 @@ except ImportError:
 import re
 import time
 
+from lib.network import open_url
+
 
 WP_VERSION_PATTERNS = [
     (r'<meta name="generator" content="WordPress ([^"]+)"', "generator_meta"),
@@ -83,12 +85,14 @@ def _fetch(url, timeout=10):
     ctx.verify_mode = ssl.CERT_NONE
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "TRAP-HUB-WPScan/1.0"})
-        resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
+        resp = open_url(req, timeout=timeout, context=ctx)
         body = resp.read().decode("utf-8", errors="replace")
-        return {"status": resp.status, "body": body, "headers": dict(resp.headers)}
+        return {"status": resp.status, "body": body,
+                "headers": {key.lower(): value for key, value in resp.headers.items()}}
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        return {"status": e.code, "body": body, "headers": dict(e.headers)}
+        return {"status": e.code, "body": body,
+                "headers": {key.lower(): value for key, value in e.headers.items()}}
     except Exception as e:
         return {"error": str(e)}
 
@@ -146,7 +150,7 @@ def _cmd_wpscan(args):
         return
 
     print(f"  [*] HTTP Status: {result['status']}")
-    server = headers.get("Server", headers.get("server", "unknown"))
+    server = headers.get("server", "unknown")
     print(f"  [*] Server: {server}")
     print()
 

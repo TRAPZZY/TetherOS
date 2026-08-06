@@ -1,6 +1,7 @@
 # Tether OS
 
-**Anonymous penetration testing distribution — bootable ISO with automatic Tor IP rotation.**  
+**Tor-routed penetration testing distribution — bootable ISO with verified Tor identity rotation.**
+
 Built by [Trapzzy](https://github.com/TRAPZZY) — product of TRAP HUB.
 
 ![Buildroot](https://img.shields.io/badge/buildroot-2024.02.3-green.svg)
@@ -9,7 +10,7 @@ Built by [Trapzzy](https://github.com/TRAPZZY) — product of TRAP HUB.
 ![Python](https://img.shields.io/badge/python-3.11-yellow.svg)
 ![License](https://img.shields.io/badge/license-MIT-red.svg)
 
-Tether OS is a bootable Linux distribution that routes all traffic through Tor with automatic IP rotation, provides 90+ built-in pentesting and forensics commands, boots from a 27MB ISO, and fits entirely in RAM (initramfs-based). It also runs as a cross-platform desktop application on Windows, Linux, and macOS.
+Tether OS is a bootable Linux distribution whose application network tools use Tor, backed by a fail-closed boot-image firewall and verified circuit rotation. It provides 90+ built-in pentesting and forensics commands, boots from an initramfs-based ISO, and also runs as a cross-platform desktop application on Windows, Linux, and macOS.
 
 ---
 
@@ -65,7 +66,7 @@ pip install -e .
 tether
 
 # Or directly
-python -m app.shell
+python -m app.entrypoint
 ```
 
 ---
@@ -77,7 +78,7 @@ python -m app.shell
 - **Automatic Tor IP rotation** — Rotates exit node every 60 seconds via `SIGNAL NEWNYM`, verified through multiple IP check services
 - **90+ built-in commands** — Recon, exploitation, forensics, web scanning, wireless, cron, anonymity tools — all self-contained
 - **Bootable Linux ISO** — 27MB ISOLINUX ISO with custom Linux 6.1.44 kernel, boots entirely in RAM
-- **iptables kill switch** — Kernel-level firewall that DROPS all non-Tor traffic
+- **iptables kill switch** — Fail-closed boot-image firewall that permits external traffic only for the Tor service account
 - **Tor on boot** — Tor daemon auto-starts, SOCKS5 proxy on `:9050`, control port on `:9051`
 - **Cross-platform** — Pure Python 3.7+, runs on Windows (native), Linux, macOS
 
@@ -144,7 +145,7 @@ Linux Kernel 6.1.44
 /init (PID 1)
   |  mount -t proc /proc
   |  /etc/init.d/rcS (boot scripts)
-  |    S01iptables: Firewall kill switch (DROP all non-Tor)
+  |    S01iptables: Fail-closed firewall (Tor service egress only)
   |    S02network: DHCP on eth0
   |    S03tor: Tor daemon (SOCKS5 :9050, Control :9051)
   |  Launches /usr/bin/tether (Python shell)
@@ -385,15 +386,16 @@ python -m pytest tests/
 python -m pytest tests/ --cov=app --cov=kernel --cov=lib
 ```
 
-76 tests covering all major subsystems.
+96 tests covering the control layer, network adapters, commands, shell engine, virtual filesystem, configuration, and Buildroot contracts.
 
 ---
 
 ## Security Model
 
-- **All traffic routes through Tor** — SOCKS5 proxy at 127.0.0.1:9050
-- **iptables kill switch** — Kernel-level firewall blocking all non-Tor traffic
-- **DNS through Tor** — Remote DNS resolution via SOCKS5
+- **Application traffic through Tor** — Shared SOCKS5 transport at 127.0.0.1:9050
+- **Fail-closed boot firewall** — External traffic is restricted to the Tor service account
+- **Remote DNS for application tools** — Hostnames are resolved through SOCKS5h
+- **Verified status** — Protection is reported only after Tor control authentication and egress verification
 - **Multiple IP verification** — Falls back across 4+ external services
 - **No persistent storage** — Entire OS runs in RAM
 - **Automatic IP rotation** — Circuit changes every 60 seconds by default

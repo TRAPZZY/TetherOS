@@ -6,6 +6,8 @@ import shutil
 import threading
 import random
 
+from app.version import __version__
+
 
 def clear():
     os.system("cls" if os.name == "nt" else "clear")
@@ -108,7 +110,7 @@ def splash_screen():
         (cy - 3, frame_line("TETHER OS", BR), BR),
         (cy - 2, dash, BR),
         (cy - 1, frame_line(">>  TARGET ACQUIRED  <<", BR), BR),
-        (cy + 0, frame_line("product of TRAP HUB  |  v1.0.0", DIM), DIM),
+        (cy + 0, frame_line(f"product of TRAP HUB  |  v{__version__}", DIM), DIM),
         (cy + 1, bar, R),
     ]
 
@@ -192,14 +194,14 @@ def set_dark_bg():
     sys.stdout.flush()
 
 
-TRAP_HUB_LOGO = """
+TRAP_HUB_LOGO = f"""
 \033[31m  ==============================================================
 \033[31m  ||   TTTTT  EEEE  TTTTT  H   H  EEEE  RRRR     O   SSSS   ||
 \033[31m  ||     T    E       T    H   H  E     R   R   O O  S      ||
 \033[31m  ||     T    EEE     T    HHHHH  EEE   RRRR   O   O  SSS   ||
 \033[31m  ||     T    E       T    H   H  E     R  R    O   O    S  ||
 \033[31m  ||     T    EEEE    T    H   H  EEEE  R   R    O   SSSS   ||
-\033[31m  ||             product of TRAP HUB  |  v1.0.0            ||
+\033[31m  ||             product of TRAP HUB  |  v{__version__:<16}||
 \033[31m  ==============================================================
 \033[0m"""
 
@@ -226,19 +228,11 @@ def boot_sequence():
     time.sleep(1)
 
     boot_msgs = [
-        ("\033[36m[\033[92m+\033[36m]\033[0m Initializing Tether OS kernel...", 0.15),
-        ("\033[36m[\033[92m+\033[36m]\033[0m Loading anti-forensic modules...", 0.12),
-        ("\033[36m[\033[92m+\033[36m]\033[0m   \033[2m[0x7A3F] memory_scraper.dll       \033[32mOK\033[0m", 0.08),
-        ("\033[36m[\033[92m+\033[36m]\033[0m   \033[2m[0xB901] process_hider.sys       \033[32mOK\033[0m", 0.08),
-        ("\033[36m[\033[92m+\033[36m]\033[0m   \033[2m[0x4C2E] log_cleaner.drv         \033[32mOK\033[0m", 0.08),
-        ("\033[36m[\033[92m+\033[36m]\033[0m   \033[2m[0xD7F1] timestamp_forger.sys    \033[32mOK\033[0m", 0.08),
-        ("\033[36m[\033[92m+\033[36m]\033[0m   \033[2m[0x2A8C] dns_spoofer.dll         \033[32mOK\033[0m", 0.08),
-        ("\033[36m[\033[92m+\033[36m]\033[0m   \033[2m[0xF034] proxy_chain_manager     \033[32mOK\033[0m", 0.08),
+        ("\033[36m[\033[92m+\033[36m]\033[0m Initializing Tether OS shell runtime...", 0.15),
+        ("\033[36m[\033[92m+\033[36m]\033[0m Loading command registry and virtual filesystem...", 0.12),
+        ("\033[36m[\033[92m+\033[36m]\033[0m Loading Tor control and rotation services...", 0.12),
         ("", 0.2),
-        ("\033[36m[\033[92m+\033[36m]\033[0m Securing control circuit...", 0.15),
-        ("\033[36m[\033[92m+\033[36m]\033[0m   \033[2mTor handshake: 3-hop relay established\033[0m", 0.1),
-        ("\033[36m[\033[92m+\033[36m]\033[0m   \033[2mExit node: Switzerland (185.220.101.x)\033[0m", 0.1),
-        ("\033[36m[\033[92m+\033[36m]\033[0m   \033[2mCircuit latency: 284ms\033[0m", 0.1),
+        ("\033[36m[\033[92m+\033[36m]\033[0m Tor state will be verified by the live status bar.", 0.15),
         ("", 0.3),
     ]
 
@@ -252,11 +246,11 @@ def boot_sequence():
 
     sys.stdout.write("\n  ")
     sys.stdout.flush()
-    type_text("YOUR CONNECTION IS NOW ANONYMIZED.", 0.04, "\033[92m")
+    type_text("RUNTIME INITIALIZED.", 0.04, "\033[92m")
     time.sleep(0.5)
     sys.stdout.write("\n  ")
     sys.stdout.flush()
-    type_text("YOUR IDENTITY REMAINS HIDDEN.", 0.04, "\033[92m")
+    type_text("VERIFY PROTECTED STATUS BEFORE NETWORK OPERATIONS.", 0.04, "\033[93m")
     time.sleep(0.8)
 
     clear()

@@ -1,41 +1,47 @@
 #!/bin/sh
-# Network kill switch — block all non-Tor traffic
+# Fail-closed firewall: only the Tor service may create internet traffic.
+
 case "$1" in
     start)
         echo "  [OK] Enabling Tor kill switch..."
-        # Default policies: everything blocked
-        iptables -F
-        iptables -t nat -F
-        iptables -P INPUT DROP
-        iptables -P FORWARD DROP
-        iptables -P OUTPUT DROP
+        iptables -w -F
+        iptables -w -t nat -F
+        iptables -w -P INPUT DROP
+        iptables -w -P FORWARD DROP
+        iptables -w -P OUTPUT DROP
 
-        # Allow loopback
-        iptables -A INPUT -i lo -j ACCEPT
-        iptables -A OUTPUT -o lo -j ACCEPT
+        TOR_UID="$(id -u tor 2>/dev/null)" || {
+            echo "  [FAIL] Tor service account is missing; firewall remains closed"
+            exit 1
+        }
 
-        # Tor needs to reach the Tor network (OR port, DirPort)
-        iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
-        iptables -A OUTPUT -p tcp --dport 9001 -j ACCEPT
-        iptables -A OUTPUT -p tcp --dport 9030 -j ACCEPT
+        # Local applications may reach Tor's loopback SOCKS/control ports.
+        iptables -w -A INPUT -i lo -j ACCEPT
+        iptables -w -A OUTPUT -o lo -j ACCEPT
 
-        # DNS for Tor (it resolves relays)
-        iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+        # DHCP is required before an internet route exists.
+        iptables -w -A OUTPUT -p udp --sport 68 --dport 67 -j ACCEPT
+        iptables -w -A INPUT -p udp --sport 67 --dport 68 -j ACCEPT
 
-        # Allow established/related connections
-        iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-        iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        # Only the unprivileged Tor account may establish external flows.
+        iptables -w -A OUTPUT -m owner --uid-owner "$TOR_UID" -j ACCEPT
+
+        iptables -w -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        iptables -w -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         ;;
     stop)
         echo "  [WARN] Disabling kill switch"
-        iptables -F
-        iptables -t nat -F
-        iptables -P INPUT ACCEPT
-        iptables -P FORWARD ACCEPT
-        iptables -P OUTPUT ACCEPT
+        iptables -w -F
+        iptables -w -t nat -F
+        iptables -w -P INPUT ACCEPT
+        iptables -w -P FORWARD ACCEPT
+        iptables -w -P OUTPUT ACCEPT
+        ;;
+    status)
+        iptables -S OUTPUT
         ;;
     *)
-        echo "Usage: $0 {start|stop}"
+        echo "Usage: $0 {start|stop|status}"
         exit 1
         ;;
 esac

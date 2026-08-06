@@ -8,12 +8,14 @@ import socket
 import subprocess
 import io
 import re as _re
+import threading
 
 sys.path.insert(0, real_os.path.dirname(real_os.path.dirname(real_os.path.abspath(__file__))))
 
 from kernel.rotator import Rotator
 from kernel.probe import Probe
-from lib.network import check_port, detect_system_tor
+from kernel.scheduler import Scheduler
+from lib.network import check_port, detect_system_tor, open_url
 from lib.pidfile import is_running, stop_daemon, read_state
 from app.banner import (
     boot_sequence, clear, hide_cursor, show_cursor, reset_color, spinner,
@@ -22,6 +24,9 @@ from app.theme import theme, list_themes
 from app.session import log_cmd, view_log
 from app.tools import Tools
 from app.vfs import VirtualFS
+from app.config import load_config
+from app.shell_parser import parse_line, ShellSyntaxError
+from app.version import __version__
 from app.commands import register_all as register_all_commands
 
 HOSTNAME = "trap-hub"
@@ -34,8 +39,11 @@ _RESTORE = "\033[u"
 _CLR_EOL = "\033[K"
 
 
+_ANSI_ESCAPE = _re.compile(r"\x1B(?:[@-_][0-?]*[ -/]*[@-~])")
+
+
 def _strip_ansi(s):
-    return _re.sub(r'\033\[[0-9;]*m', '', s)
+    return _ANSI_ESCAPE.sub("", s)
 
 
 def _col(k, text):
@@ -53,14 +61,13 @@ class StatusBar:
     def render_str(self, line):
         w = shutil.get_terminal_size().columns
         ip = self.shell._current_ip or "?.?.?.?"
-        tor_ok = detect_system_tor().get("detected", False)
-        prot = "\033[32mPROTECTED\033[0m" if tor_ok else "\033[31mEXPOSED\033[0m"
+        prot = "\033[32mVERIFIED\033[0m" if self.shell._tor_verified else "\033[33mUNVERIFIED\033[0m"
         tn = ["LOW", "GUARDED", "ELEVATED", "HIGH", "SEVERE"][min(self.shell._threat_level, 4)]
         th_clr = "\033[32m" if self.shell._threat_level < 2 else "\033[33m" if self.shell._threat_level < 4 else "\033[31m"
         theme_name = theme.get()["name"]
 
-        left = f" TRAP HUB \033[36mv1.0.0\033[0m  IP:\033[32m{ip}\033[0m  R:{self.shell._rotation_count}"
-        right = f"{prot}  TH:{th_clr}{tn}\033[0m  \033[90m{theme_name}\033[0m "
+        left = f" TRAP HUB \033[36mv{__version__}\033[0m  IP:\033[32m{ip}\033[0m  R:{self.shell._rotation_count}"
+        right = f"{prot}  RISK:{th_clr}{tn}\033[0m  \033[90m{theme_name}\033[0m "
 
         mid = " " * (w - len(_strip_ansi(left)) - len(_strip_ansi(right)))
         full = left + mid + right
@@ -133,6 +140,11 @@ class LineEditor:
                     self.history.append(cmd)
                 self.history_pos = len(self.history)
                 return cmd
+            elif ch == b'\x03':
+                self._clear_line()
+                return ""
+            elif ch == b'\x04' and not self.buffer:
+                return "exit"
             elif ch == b'\x08':
                 if self.cursor_pos > 0:
                     self.buffer = self.buffer[:self.cursor_pos-1] + self.buffer[self.cursor_pos:]
@@ -197,6 +209,12 @@ class LineEditor:
                             self.history.append(cmd)
                         self.history_pos = len(self.history)
                         return cmd
+                    elif ch == '\x03':
+                        sys.stdout.write("^C")
+                        sys.stdout.flush()
+                        return ""
+                    elif ch == '\x04' and not self.buffer:
+                        return "exit"
                     elif ch == '\x7f':
                         if self.cursor_pos > 0:
                             self.buffer = self.buffer[:self.cursor_pos-1] + self.buffer[self.cursor_pos:]
@@ -288,15 +306,21 @@ class LineEditor:
 class TetherShell:
     def __init__(self):
         self.running = False
+        self._exit_code = 0
         self._start_time = None
-        self.rotator = Rotator()
-        self.probe = Probe()
+        self.config = load_config()
+        self.rotator = Rotator(self.config.tor_options())
+        self.probe = Probe(self.config.tor_host, self.config.tor_socks_port)
+        self._scheduler = None
         self._rotation_count = 0
         self._current_ip = None
         self._tools = Tools()
         self._tor_status = "CHECKING"
-        self._interval = 60
+        self._tor_verified = False
+        self._interval = self.config.rotation_interval
         self._threat_level = 0
+        self._stdin_text = None
+        self._command_lock = threading.RLock()
         self._vfs = VirtualFS()
         self._editor = LineEditor(self)
         self._status_bar = StatusBar(self)
@@ -308,13 +332,14 @@ class TetherShell:
         self._aliases = {
             "q": "exit", "quit": "exit", "cls": "clear",
             "ll": "ls -la", "la": "ls -a", "..": "cd ..",
-            "newnym": "rotate", "stat": "status", "whereami": "geoip",
+            "newnym": "rotate", "tstatus": "status", "whereami": "geoip",
             "speed": "speedtest", "ipconfig": "ifconfig", "ver": "uname -a",
             "?" : "help", "ththeme": "theme",
         }
         self._commands = {
             "cd": self._cmd_cd, "pwd": self._cmd_pwd, "ls": self._cmd_ls,
             "cat": self._cmd_cat, "head": self._cmd_head, "tail": self._cmd_tail,
+            "grep": self._cmd_grep, "sort": self._cmd_sort, "wc": self._cmd_wc,
             "touch": self._cmd_touch, "mkdir": self._cmd_mkdir,
             "rm": self._cmd_rm, "rmdir": self._cmd_rmdir,
             "cp": self._cmd_cp, "mv": self._cmd_mv,
@@ -447,6 +472,11 @@ class TetherShell:
 
     def _cmd_cat(self, args):
         if not args:
+            if self._stdin_text is not None:
+                sys.stdout.write(self._stdin_text)
+                if self._stdin_text and not self._stdin_text.endswith("\n"):
+                    self._out()
+                return
             self._out("  usage: cat <file> [...]")
             return
         for fpath in args:
@@ -478,6 +508,11 @@ class TetherShell:
                     pass
             else:
                 files.append(a)
+        if not files and self._stdin_text is not None:
+            sys.stdout.write("\n".join(self._stdin_text.splitlines()[:n]))
+            if self._stdin_text:
+                sys.stdout.write("\n")
+            return
         if not files:
             self._out("  usage: head [-n] <file>")
             return
@@ -501,6 +536,11 @@ class TetherShell:
                     pass
             else:
                 files.append(a)
+        if not files and self._stdin_text is not None:
+            sys.stdout.write("\n".join(self._stdin_text.splitlines()[-n:]))
+            if self._stdin_text:
+                sys.stdout.write("\n")
+            return
         if not files:
             self._out("  usage: tail [-n] <file>")
             return
@@ -512,6 +552,74 @@ class TetherShell:
                     self._out(f"  {line}")
             else:
                 self._err(f"tail: {fpath}: No such file")
+
+    def _cmd_grep(self, args):
+        if not args:
+            self._out("  usage: grep [-i] <pattern> [file]")
+            return
+        ignore_case = "-i" in args
+        values = [arg for arg in args if arg != "-i"]
+        if not values:
+            self._out("  usage: grep [-i] <pattern> [file]")
+            return
+        pattern = values[0]
+        if len(values) > 1:
+            content = self._vfs.read(self._vfs.resolve(values[1]))
+            if content is None:
+                try:
+                    with open(real_os.path.abspath(values[1]), encoding="utf-8", errors="replace") as handle:
+                        content = handle.read()
+                except OSError as exc:
+                    self._err(f"grep: {values[1]}: {exc}")
+                    return
+        else:
+            content = self._stdin_text
+        if content is None:
+            self._out("  grep: no input")
+            return
+        flags = _re.IGNORECASE if ignore_case else 0
+        try:
+            matcher = _re.compile(pattern, flags)
+        except _re.error as exc:
+            self._err(f"grep: invalid pattern: {exc}")
+            return
+        for text in content.splitlines():
+            if matcher.search(text):
+                self._out(text)
+
+    def _cmd_sort(self, args):
+        reverse = "-r" in args
+        files = [arg for arg in args if not arg.startswith("-")]
+        content = self._stdin_text
+        if files:
+            content = self._vfs.read(self._vfs.resolve(files[0]))
+        if content is None:
+            self._out("  sort: no input")
+            return
+        for text in sorted(content.splitlines(), reverse=reverse):
+            self._out(text)
+
+    def _cmd_wc(self, args):
+        files = [arg for arg in args if not arg.startswith("-")]
+        content = self._stdin_text
+        label = ""
+        if files:
+            label = files[0]
+            content = self._vfs.read(self._vfs.resolve(files[0]))
+        if content is None:
+            self._out("  wc: no input")
+            return
+        lines = len(content.splitlines())
+        words = len(content.split())
+        chars = len(content)
+        if "-l" in args:
+            self._out(f"{lines:8} {label}".rstrip())
+        elif "-w" in args:
+            self._out(f"{words:8} {label}".rstrip())
+        elif "-c" in args:
+            self._out(f"{chars:8} {label}".rstrip())
+        else:
+            self._out(f"{lines:8} {words:8} {chars:8} {label}".rstrip())
 
     def _cmd_touch(self, args):
         if not args:
@@ -525,8 +633,10 @@ class TetherShell:
         if not args:
             self._out("  usage: mkdir <dir> [...]")
             return
-        for d in args:
-            if not self._vfs.mkdir(d):
+        parents = "-p" in args
+        for d in (arg for arg in args if arg != "-p"):
+            created = self._vfs.makedirs(d) if parents else self._vfs.mkdir(d)
+            if not created:
                 self._err(f"mkdir: cannot create directory '{d}'")
 
     def _cmd_rm(self, args):
@@ -607,13 +717,16 @@ class TetherShell:
         if len(args) < 2:
             self._out("  usage: chmod <mode> <file>")
             return
-        self._out(f"  chmod: {args[0]} on {args[1]} (virtual, accepted)")
+        if not self._vfs.chmod(args[1], args[0]):
+            self._err(f"chmod: cannot change mode of '{args[1]}'")
 
     def _cmd_chown(self, args):
         if len(args) < 2:
             self._out("  usage: chown <user>:<group> <file>")
             return
-        self._out(f"  chown: {args[0]} on {args[1]} (virtual, accepted)")
+        owner, _, group = args[0].partition(":")
+        if not self._vfs.chown(args[1], owner, group or None):
+            self._err(f"chown: cannot change owner of '{args[1]}'")
 
     def _cmd_find(self, args):
         path = "."
@@ -678,14 +791,15 @@ class TetherShell:
 
     def _cmd_whoami(self, args):
         self._ok(f"{USERNAME}")
-        self._out(_dim("  (identity protected by Tor network)"))
+        state = "Tor route verified" if self._tor_verified else "Tor route not yet verified"
+        self._out(_dim(f"  ({state}; run 'status' to verify current egress)"))
 
     def _cmd_uname(self, args):
         al = [a.lower() for a in args]
         if "-a" in al or "--all" in al or not args:
             info = self._tools.system_info()
             self._out(f"  TetherOS {info.get('machine', 'x86_64')}")
-            self._out(f"  Kernel: Tether OS 1.0.0 (Tor Runtime)")
+            self._out(f"  Runtime: Tether OS {__version__} (Python {info.get('python', '?')})")
             self._out(f"  Hostname: {HOSTNAME}")
 
     def _cmd_clear(self, args):
@@ -713,7 +827,7 @@ class TetherShell:
         pts.append(f"{mins}m")
         pts.append(f"{secs}s")
         tn = ["LOW", "GUARDED", "ELEVATED", "HIGH", "SEVERE"][min(self._threat_level, 4)]
-        self._ok(f"up {' '.join(pts)},  {self._rotation_count} rotations  |  threat: {tn}")
+        self._ok(f"up {' '.join(pts)},  {self._rotation_count} rotations  |  connection risk: {tn}")
 
     def _cmd_hostname(self, args):
         self._out(f"  {HOSTNAME}")
@@ -783,6 +897,9 @@ class TetherShell:
 
     def _cmd_ip(self, args):
         ip = self._current_ip or self.probe.get_current_ip() or "UNKNOWN"
+        if ip != "UNKNOWN":
+            self._current_ip = ip
+            self._tor_verified = self.rotator.tor.is_available()
         self._ok(ip)
 
     def _cmd_ifconfig(self, args):
@@ -807,14 +924,14 @@ class TetherShell:
         self._info(f"PING {host} via Tor...")
         start = time.time()
         try:
-            import urllib.request
-            ph = urllib.request.ProxyHandler({
-                "http": "socks5h://127.0.0.1:9050",
-                "https": "socks5h://127.0.0.1:9050",
-            })
-            opener = urllib.request.build_opener(ph)
             target = f"https://{host}" if "." in host else "https://httpbin.org/ip"
-            opener.open(target, timeout=10)
+            with open_url(
+                target,
+                timeout=10,
+                proxy_host=self.config.tor_host,
+                proxy_port=self.config.tor_socks_port,
+            ):
+                pass
             elapsed = (time.time() - start) * 1000
             self._ok(f"Reply from {host}: {elapsed:.1f}ms (via Tor)")
         except Exception as e:
@@ -855,8 +972,8 @@ class TetherShell:
             self._ok(f"Speed:      {r.get('speed_kbps', 0)} KB/s")
 
     def _cmd_netstat(self, args):
-        socks = check_port(9050)
-        ctrl = check_port(9051)
+        socks = check_port(self.config.tor_host, self.config.tor_socks_port)
+        ctrl = check_port(self.config.tor_host, self.config.tor_control_port)
         self._out(f"  {'PROTO':10} {'LOCAL':24} {'REMOTE':24} {'STATE':12}")
         self._out(f"  {'-'*10} {'-'*24} {'-'*24} {'-'*12}")
         ip = self._current_ip or "?"
@@ -873,14 +990,13 @@ class TetherShell:
         url = args[0]
         self._info(f"Fetching {url} via Tor...")
         try:
-            import urllib.request
-            ph = urllib.request.ProxyHandler({
-                "http": "socks5h://127.0.0.1:9050",
-                "https": "socks5h://127.0.0.1:9050",
-            })
-            opener = urllib.request.build_opener(ph)
-            resp = opener.open(url, timeout=15)
-            data = resp.read().decode("utf-8", errors="replace")
+            with open_url(
+                url,
+                timeout=15,
+                proxy_host=self.config.tor_host,
+                proxy_port=self.config.tor_socks_port,
+            ) as resp:
+                data = resp.read().decode("utf-8", errors="replace")
             for line in data.split("\n")[:20]:
                 self._out(f"  {line}")
             if len(data.split("\n")) > 20:
@@ -889,11 +1005,11 @@ class TetherShell:
             self._err(f"curl: {e}")
 
     def _cmd_traceroute(self, args):
-        self._info("Trace to destination via Tor:")
+        self._info("Conceptual Tor route (relay addresses are intentionally hidden):")
         self._out(f"   1  {_col('secondary', self._current_ip or '?.?.?.?')}  (entry guard)")
         self._out(f"   2  {_col('secondary', '***.***.***.***')}  (middle relay)")
         self._out(f"   3  {_col('secondary', '***.***.***.***')}  (exit node)")
-        self._out(f"   4  {_col('accent', 'DESTINATION')}  (anonymized)")
+        self._out(f"   4  {_col('accent', 'DESTINATION')}  (application destination)")
 
     def _cmd_nslookup(self, args):
         if not args:
@@ -902,54 +1018,61 @@ class TetherShell:
         host = args[0]
         self._info(f"Resolving {host} via Tor DNS...")
         try:
-            import urllib.request
-            ph = urllib.request.ProxyHandler({
-                "http": "socks5h://127.0.0.1:9050",
-                "https": "socks5h://127.0.0.1:9050",
-            })
-            opener = urllib.request.build_opener(ph)
-            resp = opener.open(f"https://dns.google/resolve?name={host}&type=A", timeout=10)
-            data = json.loads(resp.read().decode())
+            with open_url(
+                f"https://dns.google/resolve?name={host}&type=A",
+                timeout=10,
+                proxy_host=self.config.tor_host,
+                proxy_port=self.config.tor_socks_port,
+            ) as resp:
+                data = json.loads(resp.read().decode())
             for ans in data.get("Answer", []):
                 self._ok(f"{ans.get('name')} -> {ans.get('data')} (TTL={ans.get('TTL')})")
         except Exception as e:
-            try:
-                ip = socket.gethostbyname(host)
-                self._ok(f"{host} -> {ip}")
-            except:
-                self._err(f"nslookup: {host}: Host not found")
+            self._err(f"nslookup: Tor DNS request failed: {e}")
 
     def _cmd_rotate(self, args):
         self._info("Requesting new Tor circuit...")
         result = self.rotator.rotate()
         if result["success"]:
-            self._rotation_count += 1
+            self._rotation_count = result.get("rotations", self._rotation_count + 1)
             self._current_ip = result["new_ip"]
-            self._threat_level = min(self._threat_level + 1, 4)
+            self._tor_verified = True
+            self._threat_level = 0
             self._ok(f"{result.get('old_ip', '?')} -> {result['new_ip']}")
             self._ok(f"Rotation #{self._rotation_count}")
         else:
-            self._err("Rotation failed -- Tor control port unavailable?")
+            self._threat_level = max(self._threat_level, 3)
+            self._tor_verified = False
+            self._err(f"Rotation failed: {result.get('error', 'Tor control or exit verification failed')}")
 
     def _cmd_killswitch(self, args):
-        self._info("Engaging kill switch...")
-        ks = self._tools.kill_switch(True)
+        action = args[0].lower() if args else "status"
+        if action not in {"on", "off", "status"}:
+            self._out("  usage: killswitch [on|off|status]")
+            return
+        requested = True if action == "on" else False if action == "off" else None
+        ks = self._tools.kill_switch(requested)
         if "error" in ks:
-            self._info(f"{ks['error']} -- simulated")
-        self._ok("Non-Tor traffic blocked.")
+            self._err(ks["error"])
+            return
+        self._ok(f"Kill switch: {ks['status'].upper()}")
 
     def _cmd_status(self, args):
         sys_tor = detect_system_tor()
-        tor_ok = sys_tor["detected"]
+        control_ok = sys_tor.get("type") == "full" and self.rotator.tor.is_available()
         ip = self._current_ip or self.probe.get_current_ip() or "UNKNOWN"
+        self._tor_verified = control_ok and ip != "UNKNOWN"
+        if self._tor_verified:
+            self._current_ip = ip
         tn = ["LOW", "GUARDED", "ELEVATED", "HIGH", "SEVERE"][min(self._threat_level, 4)]
         self._out(_col("primary", "  TRAP HUB SYSTEM STATUS"))
         self._out(f"  External IP:      {_col('secondary', ip)}")
-        self._out(f"  Tor Circuit:      {_col('secondary', 'ACTIVE (3 hops)') if tor_ok else _col('warning', 'DISCONNECTED')}")
+        self._out(f"  Tor Control:      {_col('secondary', 'AUTHENTICATED') if control_ok else _col('warning', 'UNAVAILABLE')}")
         self._out(f"  Rotations:        {_col('warning', str(self._rotation_count))}")
-        self._out(f"  Threat Level:     {_col('warning' if self._threat_level >= 2 else 'secondary', tn)}")
-        self._out(f"  Anonymity:        {_col('secondary', 'PROTECTED') if tor_ok else _col('warning', 'EXPOSED')}")
-        ks = _col("warning", "ENGAGED") if real_os.environ.get("TETHER_KILLSWITCH") else _col("secondary", "STANDBY")
+        self._out(f"  Connection Risk:  {_col('warning' if self._threat_level >= 2 else 'secondary', tn)}")
+        self._out(f"  Tor Egress:       {_col('secondary', 'VERIFIED') if self._tor_verified else _col('warning', 'UNVERIFIED')}")
+        ks_state = self._tools.kill_switch().get("status", "unavailable")
+        ks = _col("warning", "ENGAGED") if ks_state == "enabled" else _col("secondary", ks_state.upper())
         self._out(f"  Kill Switch:      {ks}")
         self._out(f"  Theme:            {_col('accent', theme.get()['name'])}")
 
@@ -967,7 +1090,7 @@ class TetherShell:
         cats = [
             ("NAVIGATION", ["cd", "pwd", "ls", "find", "tree"]),
             ("FILE OPS", ["cat", "head", "tail", "touch", "mkdir", "rm", "rmdir",
-                          "cp", "mv", "chmod", "chown", "du", "stat"]),
+                          "cp", "mv", "chmod", "chown", "du", "stat", "grep", "sort", "wc"]),
             ("SYSTEM", ["whoami", "uname", "uptime", "date", "hostname",
                          "ps", "top", "clear", "echo", "env", "which"]),
             ("NETWORK", ["ip", "ifconfig", "ping", "dnsleak", "geoip",
@@ -1004,16 +1127,19 @@ class TetherShell:
         self._execute(" ".join(args))
 
     def _cmd_su(self, args):
-        self._ok("Already root. Your anonymity is absolute.")
+        self._ok("Already running as the Tether OS administrative user.")
+        self._out(_dim("  Privilege level does not guarantee anonymity; run 'status' to verify Tor."))
 
     def _cmd_shutdown(self, args):
         self._info("Shutting down Tether OS...")
         time.sleep(0.3)
+        self._exit_code = 64 if real_os.environ.get("TETHER_BOOT_IMAGE") == "1" else 0
         self.running = False
 
     def _cmd_reboot(self, args):
         self._info("Rebooting Tether OS...")
         time.sleep(0.3)
+        self._exit_code = 65 if real_os.environ.get("TETHER_BOOT_IMAGE") == "1" else 0
         self.running = False
 
     def _cmd_reset(self, args):
@@ -1096,8 +1222,10 @@ class TetherShell:
             "current_ip": self._current_ip,
             "theme": theme.get()["name"],
             "history": self._editor.history[-100:],
+            "vfs": self._vfs.to_dict(),
         }
         try:
+            real_os.makedirs(real_os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f:
                 json.dump(state, f, indent=2)
             self._ok(f"Session saved to {path}")
@@ -1114,6 +1242,8 @@ class TetherShell:
                 state = json.load(f)
             if state.get("cwd") and self._vfs.exists(state["cwd"]):
                 self._vfs.cwd = state["cwd"]
+            if state.get("vfs"):
+                self._vfs.load_dict(state["vfs"])
             self._rotation_count = state.get("rotation_count", 0)
             self._threat_level = state.get("threat_level", 0)
             self._current_ip = state.get("current_ip")
@@ -1131,7 +1261,8 @@ class TetherShell:
             self._out("  usage: cron <list|add|del|start|stop|status> [options]")
             return
         try:
-            from app.commands.cron import _cmd_cron as _cc
+            from app.commands.cron import _cmd_cron as _cc, _cron
+            _cron.attach_shell(self)
             _cc(args)
         except Exception as e:
             self._err(f"cron: {e}")
@@ -1140,7 +1271,7 @@ class TetherShell:
         w = shutil.get_terminal_size().columns
         sep = _col("primary", "=" * min(w - 2, 54))
         self._out(f"  {sep}")
-        self._out(f"  {_col('primary', 'TRAP HUB')} {_col('accent', 'v1.0.0')}  |  {_col('secondary', 'SECURE TERMINAL')}")
+        self._out(f"  {_col('primary', 'TRAP HUB')} {_col('accent', 'v' + __version__)}  |  {_col('secondary', 'SECURE TERMINAL')}")
         self._out(f"  {sep}")
         self._out(f"  {_dim('Type')} {_col('accent', 'help')} {_dim('for commands')}  |  {_col('accent', 'theme list')} {_dim('to change colors')}")
         self._out(f"  {_dim(f'{len(self._commands)} built-in commands')}")
@@ -1157,61 +1288,70 @@ class TetherShell:
         sys.stdout.flush()
 
         raw = line.strip()
-        append_mode = False
-        redirect_file = None
-
-        has_pipe = "|" in raw
-        if ">>" in raw and (not has_pipe or ">>" not in raw.split("|")[-1]):
-            parts = raw.rsplit(">>", 1)
-            redirect_file = parts[1].strip()
-            raw = parts[0].strip()
-            append_mode = True
-        elif ">" in raw and (not has_pipe or ">" not in raw.split("|")[-1]):
-            parts = raw.rsplit(">", 1)
-            redirect_file = parts[1].strip()
-            raw = parts[0].strip()
-
-        if "|" in raw:
-            segments = [s.strip() for s in raw.split("|")]
-            self._execute_pipe(segments)
+        try:
+            parsed = parse_line(raw)
+        except ShellSyntaxError as exc:
+            self._err(f"syntax error: {exc}")
+            return
+        if not parsed.commands:
             return
 
-        parts = raw.split()
-        cmd = parts[0].lower()
-        args = parts[1:]
+        with self._command_lock:
+            output = self._run_pipeline(parsed.commands)
+            plain_output = self._strip_ansi(output)
+            if parsed.redirect_path:
+                resolved = self._vfs.resolve(parsed.redirect_path)
+                existing = self._vfs.read(resolved) or ""
+                content = existing + plain_output if parsed.append else plain_output
+                if not self._vfs.write(resolved, content):
+                    self._err(f"redirect: cannot write '{parsed.redirect_path}'")
+            elif output:
+                sys.stdout.write(output)
+                if not output.endswith("\n"):
+                    sys.stdout.write("\n")
+                sys.stdout.flush()
 
-        if cmd in self._aliases:
-            expanded = self._aliases[cmd]
-            if "$@" in expanded or "{}" in expanded:
-                expanded = expanded.replace("$@", " ".join(args)).replace("{}", " ".join(args))
-            else:
-                expanded = expanded + " " + " ".join(args) if args else expanded
-            self._execute(expanded, _from_script)
-            return
+            if not _from_script:
+                log_cmd(raw, plain_output)
 
-        captured = self._run_captured(cmd, args)
-        output, _ = captured
+    def _expand_alias(self, argv):
+        expanded = list(argv)
+        visited = set()
+        while expanded and expanded[0].lower() in self._aliases:
+            name = expanded[0].lower()
+            if name in visited:
+                raise RuntimeError(f"alias cycle detected at '{name}'")
+            visited.add(name)
+            target = self._aliases[name]
+            trailing = expanded[1:]
+            if "$@" in target or "{}" in target:
+                joined = " ".join(trailing)
+                target = target.replace("$@", joined).replace("{}", joined)
+                trailing = []
+            alias_argv = parse_line(target).commands
+            if len(alias_argv) != 1:
+                raise RuntimeError(f"alias '{name}' must expand to one command")
+            expanded = alias_argv[0].argv + trailing
+        return expanded
 
-        if redirect_file:
-            resolved = self._vfs.resolve(redirect_file)
-            existing = self._vfs.read(resolved) or ""
-            self._vfs.write(resolved, (existing + output) if append_mode else output)
-            return
+    def _run_pipeline(self, commands):
+        output = None
+        for command in commands:
+            argv = self._expand_alias(command.argv)
+            output, _ = self._run_captured(argv, stdin_text=output)
+        return output or ""
 
-        if output:
-            for line_text in output.split("\n"):
-                s = self._strip_ansi(line_text).strip()
-                if s:
-                    self._out(f"  {line_text.strip()}")
-
-        if not _from_script:
-            log_cmd(raw, output)
-
-    def _run_captured(self, cmd, args):
+    def _run_captured(self, argv, stdin_text=None):
         buf = io.StringIO()
         old = sys.stdout
+        old_stdin = self._stdin_text
         sys.stdout = buf
+        self._stdin_text = stdin_text
         try:
+            if not argv:
+                return "", None
+            cmd = argv[0].lower()
+            args = argv[1:]
             if cmd in self._commands:
                 try:
                     self._commands[cmd](args)
@@ -1224,73 +1364,36 @@ class TetherShell:
             elif cmd == "cd" and not args:
                 self._cmd_cd(["~"])
             else:
-                self._run_system_captured(cmd, args)
+                self._run_system_captured(argv, stdin_text)
         finally:
             sys.stdout = old
+            self._stdin_text = old_stdin
             sys.stdout.flush()
         return buf.getvalue(), None
 
-    def _run_system_captured(self, cmd, args):
+    def _run_system_captured(self, argv, stdin_text=None):
+        cmd = argv[0]
         try:
             r = subprocess.run(
-                [cmd] + args, capture_output=True, text=True, timeout=15, shell=True,
+                argv,
+                input=stdin_text,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                shell=False,
             )
-            if r.returncode == 0:
-                for line in r.stdout.split("\n"):
-                    sys.stdout.write(f"  {line}\n")
-            else:
-                stderr = r.stderr.strip() or r.stdout.strip()
-                if stderr:
-                    for line in stderr.split("\n"):
-                        sys.stdout.write(f"  {line}\n")
-                else:
-                    sys.stdout.write(f"  {cmd}: command not found\n")
+            if r.stdout:
+                sys.stdout.write(r.stdout)
+            if r.stderr:
+                sys.stdout.write(r.stderr)
+            if r.returncode != 0 and not r.stdout and not r.stderr:
+                sys.stdout.write(f"{cmd}: exited with status {r.returncode}\n")
         except FileNotFoundError:
-            sys.stdout.write(f"  {cmd}: command not found\n")
+            sys.stdout.write(f"{cmd}: command not found\n")
         except subprocess.TimeoutExpired:
-            sys.stdout.write(f"  {cmd}: timed out (15s)\n")
+            sys.stdout.write(f"{cmd}: timed out (60s)\n")
         except Exception as e:
-            sys.stdout.write(f"  {cmd}: {e}\n")
-
-    def _execute_pipe(self, segments):
-        output = None
-        for segment in segments:
-            parts = segment.split()
-            if not parts:
-                continue
-            cmd = parts[0].lower()
-            args = parts[1:]
-
-            if cmd in self._aliases:
-                expanded = self._aliases[cmd]
-                if "$@" in expanded or "{}" in expanded:
-                    expanded = expanded.replace("$@", " ".join(args)).replace("{}", " ".join(args))
-                else:
-                    expanded = expanded + " " + " ".join(args) if args else expanded
-                    parts = expanded.split()
-                    cmd = parts[0].lower()
-                    args = parts[1:]
-
-            buf = io.StringIO()
-            old = sys.stdout
-            sys.stdout = buf
-            try:
-                if cmd in self._commands:
-                    self._commands[cmd](args)
-                elif cmd == "cd" and not args:
-                    self._cmd_cd(["~"])
-                else:
-                    self._run_system_captured(cmd, args)
-            except Exception as e:
-                sys.stdout.write(f"  {cmd}: {e}\n")
-            finally:
-                sys.stdout = old
-            output = buf.getvalue()
-
-        if output:
-            for line in output.split("\n"):
-                if self._strip_ansi(line).strip():
-                    self._out(f"  {line.strip()}")
+            sys.stdout.write(f"{cmd}: {e}\n")
 
     def _strip_ansi(self, s):
         return _strip_ansi(s)
@@ -1300,7 +1403,7 @@ class TetherShell:
         sep = _col("primary", "=" * min(w - 2, 54))
         lines = [
             f"  {sep}",
-            f"  {_col('primary', 'TRAP HUB')} {_col('accent', 'v1.0.0')}  |  {_col('secondary', 'SECURE TERMINAL')}",
+            f"  {_col('primary', 'TRAP HUB')} {_col('accent', 'v' + __version__)}  |  {_col('secondary', 'SECURE TERMINAL')}",
             f"  {sep}",
             f"  {_dim('Type')} {_col('accent', 'help')} {_dim('for commands')}  |  {_col('accent', 'theme list')} {_dim('to change colors')}",
             f"  {_dim(f'{len(self._commands)} built-in commands')}",
@@ -1315,6 +1418,28 @@ class TetherShell:
         sys.stdout.write("\033[7;1H")
         sys.stdout.flush()
 
+    def _on_scheduled_rotation(self, result):
+        if result.get("success"):
+            self._rotation_count = result.get("rotations", self._rotation_count)
+            self._current_ip = result.get("new_ip")
+            self._tor_verified = True
+            self._threat_level = 0
+        else:
+            self._threat_level = max(self._threat_level, 3)
+            self._tor_verified = False
+
+    def _start_rotation_scheduler(self):
+        if not self.config.auto_rotate or self._scheduler is not None:
+            return
+        self._scheduler = Scheduler(
+            interval=self._interval,
+            config=self.config.tor_options(),
+            on_rotation=self._on_scheduled_rotation,
+            rotate_immediately=False,
+            rotator=self.rotator,
+        )
+        self._scheduler.start()
+
     def start(self):
         hide_cursor()
         self.running = True
@@ -1322,6 +1447,7 @@ class TetherShell:
         boot_sequence()
         clear()
         self._setup_screen()
+        self._start_rotation_scheduler()
         try:
             while self.running:
                 h = shutil.get_terminal_size().lines
@@ -1336,9 +1462,18 @@ class TetherShell:
         finally:
             sys.stdout.write("\033[r")
             self.shutdown()
+        return self._exit_code
 
     def shutdown(self):
         self.running = False
+        if self._scheduler:
+            self._scheduler.stop()
+            self._scheduler = None
+        try:
+            from app.commands.cron import _cron
+            _cron.stop()
+        except Exception:
+            pass
         show_cursor()
         clear()
         w = shutil.get_terminal_size().columns
@@ -1353,14 +1488,14 @@ class TetherShell:
             self._out(f"    Commands:   {len(self._editor.history)}")
         self._out(f"    Rotations:  {self._rotation_count}")
         self._out()
-        self._ok("YOUR IDENTITY REMAINS HIDDEN")
-        self._out(_col("primary", "Stay safe out there, operator."))
+        self._ok("SESSION CLOSED CLEANLY")
+        self._out(_col("primary", "Verify network state before the next operation."))
         self._out()
 
 
 def main():
     shell = TetherShell()
-    shell.start()
+    return shell.start()
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -5,14 +5,15 @@ Communicates via Tor's control port (default 9051).
 
 import socket
 import time
-import re
+import os
 
 
 class TorCtl:
-    def __init__(self, host="127.0.0.1", port=9051, password=None):
+    def __init__(self, host="127.0.0.1", port=9051, password=None, cookie_path=None):
         self.host = host
         self.port = port
         self.password = password
+        self.cookie_path = cookie_path
 
     def _connect(self):
         sock = socket.create_connection((self.host, self.port), timeout=5)
@@ -21,12 +22,33 @@ class TorCtl:
 
     def _authenticate(self, sock):
         if self.password:
-            self._send(sock, f'AUTHENTICATE "{self.password}"')
+            escaped = str(self.password).replace("\\", "\\\\").replace('"', '\\"')
+            self._send(sock, f'AUTHENTICATE "{escaped}"')
         else:
-            self._send(sock, "AUTHENTICATE")
+            cookie = self._read_cookie()
+            self._send(sock, f"AUTHENTICATE {cookie.hex()}" if cookie else "AUTHENTICATE")
         resp = self._recv(sock)
         if not resp.startswith("250"):
             raise RuntimeError(f"Tor auth failed: {resp}")
+
+    def _read_cookie(self):
+        candidates = [
+            self.cookie_path,
+            "/run/tor/control.authcookie",
+            "/var/lib/tor/control_auth_cookie",
+            os.path.expanduser("~/.tor/control_auth_cookie"),
+        ]
+        for path in candidates:
+            if not path:
+                continue
+            try:
+                with open(path, "rb") as handle:
+                    cookie = handle.read(32)
+                if len(cookie) == 32:
+                    return cookie
+            except OSError:
+                continue
+        return None
 
     def _send(self, sock, cmd):
         sock.sendall(f"{cmd}\r\n".encode())
@@ -38,8 +60,10 @@ class TorCtl:
             if not chunk:
                 break
             data += chunk
-            if b"\r\n" in data:
-                break
+            lines = data.split(b"\r\n")
+            for line in lines[:-1]:
+                if len(line) >= 4 and line[:3].isdigit() and line[3:4] == b" ":
+                    return data.decode("utf-8", errors="replace").strip()
         return data.decode().strip()
 
     def newnym(self):
@@ -49,8 +73,6 @@ class TorCtl:
             resp = self._recv(sock)
             if not resp.startswith("250"):
                 raise RuntimeError(f"NEWNYM failed: {resp}")
-            # Tor needs a brief moment to build the new circuit
-            time.sleep(0.5)
             return True
         finally:
             sock.close()
@@ -63,3 +85,11 @@ class TorCtl:
             return resp.count("BUILT")
         finally:
             sock.close()
+
+    def is_available(self):
+        try:
+            sock = self._connect()
+            sock.close()
+            return True
+        except (OSError, RuntimeError):
+            return False

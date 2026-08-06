@@ -12,8 +12,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kernel.scheduler import Scheduler
 from lib.network import check_tor, check_port, detect_tor_browser, detect_system_tor
-from lib.pidfile import write_pid, remove_pid, write_state
+from lib.pidfile import write_pid, remove_pid, write_state, is_running
 from kernel.probe import Probe
+from app.config import load_config
+from app.version import __version__
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,26 +24,26 @@ logging.basicConfig(
 log = logging.getLogger("tether.daemon")
 
 
-def main():
-    log.info("Tether OS daemon starting up")
+def main(interval=None):
+    log.info("Tether OS %s daemon starting up", __version__)
+
+    existing_pid = is_running()
+    if existing_pid:
+        log.error("Daemon already running (PID %s)", existing_pid)
+        return 1
 
     tor_binary = check_tor()
     sys_tor = detect_system_tor()
 
     if not tor_binary:
-        log.warning("Tor binary not found in PATH, checking running Tor instances...")
-        if sys_tor["detected"] and sys_tor["type"] == "full":
-            log.info(
-                f"Tor daemon already running on ports "
-                f"{sys_tor['socks_port']} (SOCKS) / {sys_tor['control_port']} (Ctrl) -- continuing"
-            )
-        elif sys_tor["detected"] and sys_tor["type"] == "partial":
+        log.warning("Tor binary not found in PATH; a managed running instance is still acceptable")
+    if not sys_tor.get("detected") or sys_tor.get("type") != "full":
+        if sys_tor.get("type") == "partial":
             log.error(
                 "Tor SOCKS port found but control port 9051 is closed.\n"
                 "  Tether OS needs control port access to rotate IPs.\n"
                 "  Check your Tor configuration has: ControlPort 9051"
             )
-            sys.exit(1)
         else:
             browser = detect_tor_browser()
             if browser["detected"]:
@@ -58,29 +60,19 @@ def main():
                     "  2. Start Tor with control port enabled (ControlPort 9051)\n"
                     "  3. Run tetherd again"
                 )
-            sys.exit(1)
+        return 1
 
     try:
         write_pid()
     except Exception as e:
         log.error(f"Failed to write PID file: {e}")
-        sys.exit(1)
+        return 1
 
-    probe = Probe()
-    try:
-        start_ip = probe.get_ip(use_tor=False)
-        log.info(f"Public IP (direct): {start_ip}")
-    except Exception:
-        log.warning("Could not determine public IP (no internet?)")
-        start_ip = "unknown"
-
-    config = {
-        "tor_host": "127.0.0.1",
-        "tor_control_port": 9051,
-        "tor_socks_port": 9050,
-    }
-
-    sched = Scheduler(interval=60, config=config)
+    runtime_config = load_config()
+    sched = Scheduler(
+        interval=interval or runtime_config.rotation_interval,
+        config=runtime_config.tor_options(),
+    )
     sched.start()
 
     write_state(sched.summary())
@@ -90,7 +82,7 @@ def main():
         sched.stop()
         remove_pid()
         log.info("Tether OS daemon stopped")
-        sys.exit(0)
+        raise SystemExit(0)
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)

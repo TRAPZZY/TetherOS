@@ -33,12 +33,14 @@ class TestReconCommands:
 
     def test_nmap_localhost(self):
         with CaptureOutput() as out:
-            _cmd_nmap(["-p", "22,80", "127.0.0.1"])
+            _cmd_nmap(["--direct", "-p", "22,80", "127.0.0.1"])
         assert "Scanning" in out.getvalue()
 
-    def test_nmap_with_tor_flag(self):
+    @patch("app.commands.recon.create_connection")
+    def test_nmap_with_tor_flag(self, mock_connect):
+        mock_connect.side_effect = OSError("closed")
         with CaptureOutput() as out:
-            _cmd_nmap(["--tor", "127.0.0.1"])
+            _cmd_nmap(["--tor", "-p", "80,443", "example.com"])
         assert "via Tor" in out.getvalue()
 
     def test_dnsrecon_no_args(self):
@@ -46,9 +48,9 @@ class TestReconCommands:
             _cmd_dnsrecon([])
         assert "usage:" in out.getvalue()
 
-    @patch("app.commands.recon._try_resolve")
-    def test_dnsrecon_lookup(self, mock_resolve):
-        mock_resolve.return_value = "93.184.216.34"
+    @patch("app.commands.recon._doh_query")
+    def test_dnsrecon_lookup(self, mock_query):
+        mock_query.return_value = [{"name": "example.com.", "data": "93.184.216.34"}]
         with CaptureOutput() as out:
             _cmd_dnsrecon(["-d", "example.com", "-t", "std"])
         assert "DNS Reconnaissance" in out.getvalue()
@@ -74,9 +76,9 @@ class TestReconCommands:
             _cmd_theharvester([])
         assert "usage:" in out.getvalue()
 
-    @patch("app.commands.recon._try_resolve")
-    def test_theharvester_domain(self, mock_resolve):
-        mock_resolve.return_value = "93.184.216.34"
+    @patch("app.commands.recon._doh_query")
+    def test_theharvester_domain(self, mock_query):
+        mock_query.return_value = [{"name": "www.example.com.", "data": "93.184.216.34"}]
         with CaptureOutput() as out:
             _cmd_theharvester(["-d", "example.com", "-b", "dns"])
         assert "OSINT" in out.getvalue()

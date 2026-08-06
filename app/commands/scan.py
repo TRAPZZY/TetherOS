@@ -15,6 +15,8 @@ import json
 import time
 import re
 
+from lib.network import create_connection, open_url
+
 
 NUCLEI_TEMPLATES = [
     {"id": "tech-detect", "name": "Technology Detection", "severity": "info",
@@ -56,12 +58,12 @@ def _fetch_url(url, timeout=10):
     ctx.verify_mode = ssl.CERT_NONE
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "TRAP-HUB-Scanner/1.0"})
-        resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
-        headers = dict(resp.headers)
+        resp = open_url(req, timeout=timeout, context=ctx)
+        headers = {key.lower(): value for key, value in resp.headers.items()}
         body = resp.read().decode("utf-8", errors="replace")[:5000]
         return {"status": resp.status, "headers": headers, "body": body, "url": url}
     except urllib.error.HTTPError as e:
-        return {"status": e.code, "headers": dict(e.headers), "body": "", "url": url}
+        return {"status": e.code, "headers": {key.lower(): value for key, value in e.headers.items()}, "body": "", "url": url}
     except Exception as e:
         return {"error": str(e), "url": url}
 
@@ -102,7 +104,7 @@ def _cmd_nikto(args):
         return
 
     print(f"  [*] Server response: {result['status']}")
-    server = result["headers"].get("Server", result["headers"].get("server", "unknown"))
+    server = result["headers"].get("server", "unknown")
     print(f"  [*] Server: {server}")
     print()
 
@@ -199,7 +201,9 @@ def _cmd_nuclei(args):
 
         if "checks" in tmpl:
             for check in tmpl["checks"]:
-                header_text = json.dumps(result["headers"]).lower()
+                header_text = "\n".join(
+                    f"{key}: {value}" for key, value in result["headers"].items()
+                ).lower()
                 body_lower = result["body"].lower()
                 match_val = check["match"].lower()
                 if match_val in header_text or match_val in body_lower:
@@ -224,9 +228,9 @@ def _cmd_nuclei(args):
         if "ports" in tmpl:
             for p in tmpl["ports"][:10]:
                 try:
-                    s = socket.socket()
-                    s.settimeout(1)
-                    if s.connect_ex((url.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0], p)) == 0:
+                    host = url.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
+                    s = create_connection(host, p, timeout=1, use_tor=True)
+                    if s:
                         findings.append({
                             "template": tmpl["id"],
                             "name": f"Port {p} open",

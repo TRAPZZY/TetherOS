@@ -24,6 +24,8 @@ class TestProbe:
     def test_get_ip_direct_success(self, mock_urlopen):
         resp = MagicMock()
         resp.read.return_value = b"203.0.113.42\n"
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
         mock_urlopen.return_value = resp
 
         p = Probe()
@@ -49,6 +51,8 @@ class TestProbe:
                 raise Exception("fail")
             resp = MagicMock()
             resp.read.return_value = b"198.51.100.7\n"
+            resp.__enter__.return_value = resp
+            resp.__exit__.return_value = False
             return resp
 
         mock_urlopen.side_effect = side_effect
@@ -62,3 +66,13 @@ class TestProbe:
         p = Probe()
         ip = p.get_ip(use_tor=False)
         assert ip is None
+
+    @patch("kernel.probe.open_url")
+    def test_get_ip_tor_uses_shared_tor_transport(self, mock_open):
+        response = MagicMock()
+        response.read.return_value = b"203.0.113.9\n"
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        mock_open.return_value = response
+        assert Probe().get_current_ip() == "203.0.113.9"
+        assert mock_open.call_args.kwargs["use_tor"] is True

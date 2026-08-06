@@ -26,7 +26,7 @@ def _netsh_output(*args):
     try:
         result = subprocess.run(
             ["netsh"] + list(args),
-            capture_output=True, text=True, timeout=10, shell=True
+            capture_output=True, text=True, timeout=10, shell=False
         )
         return result.stdout
     except:
@@ -59,7 +59,7 @@ def _cmd_iwconfig(args):
     guid = current.get("GUID", "?")
     state = current.get("State", "?")
     ssid = current.get("SSID", "?")
-    signal = current.get("Signal", "?")
+    signal = current.get("Signal", "?").rstrip("%")
     rate = current.get("Receive rate", current.get("Transmit rate", "?"))
 
     if name != "?":
@@ -124,6 +124,8 @@ def _cmd_airodump(args):
     print(f"  {'-'*30} {'-'*8} {'-'*8} {'-'*20}")
 
     current_ssid = None
+    sig = "?"
+    ch = "?"
     for line in lines:
         m = re.match(r'^\s+SSID\s+\d+\s+:\s+(.+)$', line)
         if m:

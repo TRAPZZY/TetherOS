@@ -5,6 +5,8 @@ Queries external services to confirm public IP address.
 import socket
 import urllib.request
 
+from lib.network import open_url
+
 
 _SERVICES = [
     "https://api.ipify.org",
@@ -18,21 +20,17 @@ class Probe:
         self.proxy_host = proxy_host
         self.proxy_port = proxy_port
 
-    def _proxy_support(self):
-        return urllib.request.ProxyHandler({
-            "http": f"socks5://{self.proxy_host}:{self.proxy_port}",
-            "https": f"socks5h://{self.proxy_host}:{self.proxy_port}",
-        })
-
     def get_ip(self, use_tor=True):
         for url in _SERVICES:
             try:
-                if use_tor:
-                    opener = urllib.request.build_opener(self._proxy_support())
-                    resp = opener.open(url, timeout=10)
-                else:
-                    resp = urllib.request.urlopen(url, timeout=10)
-                ip = resp.read().decode().strip()
+                with open_url(
+                    url,
+                    timeout=10,
+                    use_tor=use_tor,
+                    proxy_host=self.proxy_host,
+                    proxy_port=self.proxy_port,
+                ) as resp:
+                    ip = resp.read().decode().strip()
                 if self._valid_ip(ip):
                     return ip
             except Exception:

@@ -14,17 +14,27 @@ stty sane < /dev/console 2>/dev/null || true
 
 export HOME=/root
 export TERM=linux
+export TETHER_BOOT_IMAGE=1
 cd /home/tether 2>/dev/null || true
 
-echo "[OK] Tether OS v1.1.0 -- starting TRAP HUB..." > /dev/console 2>/dev/null
+echo "[OK] Tether OS v1.1.2 -- starting TRAP HUB..." > /dev/console 2>/dev/null
 
 while true; do
     if [ -x /usr/bin/tether ]; then
         /usr/bin/tether < /dev/console > /dev/console 2>&1
+        SHELL_STATUS=$?
+        case "$SHELL_STATUS" in
+            64) poweroff -f ;;
+            65) reboot -f ;;
+            *)
+                echo "init: Tether shell exited; restarting..." > /dev/console 2>/dev/null
+                sleep 1
+                ;;
+        esac
     else
         echo "init: /usr/bin/tether not found" > /dev/console 2>/dev/null
+        echo "init: Rescue shell (exit to retry)." > /dev/console 2>/dev/null
+        /bin/sh < /dev/console > /dev/console 2>&1
     fi
     stty sane < /dev/console 2>/dev/null || true
-    echo "init: Rescue shell (exit to restart)." > /dev/console 2>/dev/null
-    /bin/sh < /dev/console > /dev/console 2>&1
 done
