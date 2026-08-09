@@ -14,9 +14,16 @@ mkdir -p "$ISO_DIR/isolinux"
 
 cp "$BINARIES_DIR/bzImage" "$ISO_DIR/"
 
-cd "$TARGET_DIR"
-find . -print0 | cpio --null -o --format=newc | gzip -9 > "$ISO_DIR/rootfs.cpio.gz"
-cd "$OLDPWD"
+# Buildroot creates this archive under fakeroot, after applying users tables,
+# ownership, device nodes, capabilities, and SUID metadata. Never recreate it
+# directly from output/target: that directory intentionally lacks those final
+# image-time mutations.
+ROOTFS_CPIO="$BINARIES_DIR/rootfs.cpio.gz"
+if [ ! -s "$ROOTFS_CPIO" ]; then
+    echo "ERROR: Buildroot did not produce rootfs.cpio.gz" >&2
+    exit 1
+fi
+cp "$ROOTFS_CPIO" "$ISO_DIR/rootfs.cpio.gz"
 
 cp "$ISOLINUX_BIN" "$ISO_DIR/isolinux/"
 cp "$LDLINUX_C32" "$ISO_DIR/isolinux/"

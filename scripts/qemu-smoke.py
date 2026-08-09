@@ -9,6 +9,24 @@ import sys
 SESSION_PASSWORD = "TRAP-HUB-Test-Session-2026!"
 
 
+class RedactingTranscript:
+    """Keep enough serial output to diagnose a smoke failure without secrets."""
+
+    def __init__(self, secret, limit=12_000):
+        self._secret = secret
+        self._limit = limit
+        self._text = ""
+
+    def write(self, value):
+        self._text = (self._text + value.replace(self._secret, "[REDACTED]"))[-self._limit :]
+
+    def flush(self):
+        pass
+
+    def tail(self):
+        return self._text or "[no serial output captured]"
+
+
 def run_smoke(iso_path, *, edition="core", timeout=300):
     try:
         import pexpect
@@ -37,7 +55,8 @@ def run_smoke(iso_path, *, edition="core", timeout=300):
         codec_errors="replace",
         timeout=timeout,
     )
-    child.logfile_read = sys.stdout
+    transcript = RedactingTranscript(SESSION_PASSWORD)
+    child.logfile_read = transcript
     try:
         child.expect("TRAP HUB // SECURE SESSION SETUP")
         child.sendline("")
@@ -81,7 +100,14 @@ def run_smoke(iso_path, *, edition="core", timeout=300):
         child.sendline("exit")
         child.expect("(?i)password:")
         return 0
+    except Exception as exc:
+        raise RuntimeError(
+            "TetherOS QEMU smoke failed; redacted serial transcript follows:\n"
+            f"{transcript.tail()}"
+        ) from exc
     finally:
+        sys.stdout.write(transcript.tail())
+        sys.stdout.flush()
         child.close(force=True)
 
 

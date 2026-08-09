@@ -79,6 +79,20 @@ def test_build_defines_locked_non_root_session_and_authentication_features():
     assert "BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES" in builder
 
 
+def test_iso_uses_buildroot_fakeroot_image_for_users_and_ownership():
+    builder = (ROOT / "scripts" / "build-distro.sh").read_text()
+    post_image = (
+        ROOT / "buildroot-external-tether" / "board" / "tether" /
+        "post-image.sh"
+    ).read_text()
+
+    assert "enable_config BR2_TARGET_ROOTFS_CPIO" in builder
+    assert "enable_config BR2_TARGET_ROOTFS_CPIO_GZIP" in builder
+    assert 'ROOTFS_CPIO="$BINARIES_DIR/rootfs.cpio.gz"' in post_image
+    assert 'cp "$ROOTFS_CPIO" "$ISO_DIR/rootfs.cpio.gz"' in post_image
+    assert "find . -print0 | cpio" not in post_image
+
+
 def test_getty_uses_fixed_account_greeter_and_standard_login():
     overlay = (
         ROOT / "buildroot-external-tether" / "board" / "tether" /

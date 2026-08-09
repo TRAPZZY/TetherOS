@@ -105,6 +105,12 @@ sed -i 's/BR2_TARGET_GENERIC_GETTY_BAUDRATE=".*"/BR2_TARGET_GENERIC_GETTY_BAUDRA
 # Rootfs size
 sed -i 's/BR2_TARGET_ROOTFS_EXT2_SIZE=".*"/BR2_TARGET_ROOTFS_EXT2_SIZE="500M"/' "$CFG"
 
+# The boot ISO must consume a Buildroot-generated filesystem image. Custom
+# users, numeric ownership, and SUID bits are applied during Buildroot's
+# fakeroot image phase and are not guaranteed in output/target.
+enable_config BR2_TARGET_ROOTFS_CPIO
+enable_config BR2_TARGET_ROOTFS_CPIO_GZIP
+
 # Enable Python 3
 enable_config BR2_PACKAGE_PYTHON3
 enable_config BR2_PACKAGE_PYTHON3_SSL

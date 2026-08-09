@@ -29,6 +29,9 @@ Hardware / QEMU
 - downloads Buildroot 2025.02.16 LTS and verifies its SHA-256 digest;
 - begins with the upstream QEMU x86_64 defconfig;
 - applies the TRAP HUB external tree, users table, BusyBox and kernel fragments;
+- generates the compressed root filesystem through Buildroot's fakeroot image
+  phase, where users, ownership, devices, and special permission bits become
+  part of the boot artifact;
 - generates either the default `core` image or optional `desktop` image;
 - saves the generated defconfig and produces an ISOLINUX ISO.
 

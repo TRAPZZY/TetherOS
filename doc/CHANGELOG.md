@@ -20,6 +20,9 @@
   2025.02.16 LTS with Core and Desktop editions.
 - Added Python 3.11/3.12 quality gates, both-edition image builds, and QEMU
   authentication/lock smoke tests in GitHub Actions.
+- Changed ISO assembly to consume Buildroot's fakeroot-generated CPIO image so
+  custom users, numeric ownership, device metadata, and SUID permissions are
+  present in the booted system.
 
 ## v1.1.2 (2026-08-05)
 
