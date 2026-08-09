@@ -19,8 +19,8 @@ permissions:
 jobs:
   build:
     env:
-      BUILDROOT_DIR: ${{ runner.temp }}/buildroot-2025.02.16
-      BUILDROOT_IMAGES: ${{ runner.temp }}/buildroot-2025.02.16/output/images
+      BUILDROOT_DIR: /home/runner/buildroot-2025.02.16
+      BUILDROOT_IMAGES: /home/runner/buildroot-2025.02.16/output/images
     strategy:
       fail-fast: false
       matrix:
