@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import re
 
 import pytest
 
@@ -39,3 +40,26 @@ def test_boot_budget_reports_elapsed_time_and_rejects_regressions():
     assert QEMU_SMOKE._enforce_boot_budget(10, 20, now=25) == 15
     with pytest.raises(RuntimeError, match="boot-to-shell"):
         QEMU_SMOKE._enforce_boot_budget(10, 20, now=31)
+
+
+def test_shell_prompt_pattern_waits_for_the_interactive_prompt():
+    rendered = "\x1b[23;1H\x1b[2K\x1b[36m>\x1b[0m "
+    assert re.search(QEMU_SMOKE.SHELL_PROMPT_PATTERN, rendered)
+    assert re.search(
+        QEMU_SMOKE.SCHEDULER_READY_PATTERN,
+        "Scheduler started -- rotating IP every 60s",
+    )
+
+
+def test_serial_lines_are_paced_before_their_terminator():
+    calls = []
+
+    class Child:
+        def send_slow(self, delay, value):
+            calls.append(("slow", delay, value))
+
+        def sendline(self, value):
+            calls.append(("line", value))
+
+    QEMU_SMOKE._send_serial_line(Child(), "deck --json")
+    assert calls == [("slow", 0.01, "deck --json"), ("line", "")]

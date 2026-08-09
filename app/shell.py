@@ -1,4 +1,5 @@
 """shell.py -- TRAP HUB CLI shell inspired by Claude Code's terminal design"""
+import codecs
 import sys
 import os as real_os
 import time
@@ -125,12 +126,11 @@ class LineEditor:
         self.tab_index = -1
         h = shutil.get_terminal_size().lines
         prompt = self.prompt_str()
-        sys.stdout.write(f"\033[{h - 1};1H\033[2K{prompt}")
-        sys.stdout.flush()
         if real_os.name == "nt":
+            sys.stdout.write(f"\033[{h - 1};1H\033[2K{prompt}")
+            sys.stdout.flush()
             return self._read_win()
-        else:
-            return self._read_unix()
+        return self._read_unix(prompt, h)
 
     def _redraw_input(self):
         h = shutil.get_terminal_size().lines
@@ -210,16 +210,31 @@ class LineEditor:
                 except:
                     pass
 
-    def _read_unix(self):
+    def _read_unix(self, prompt, terminal_height):
         import termios, tty, select
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
+        decoder = codecs.getincrementaldecoder(sys.stdin.encoding or "utf-8")(
+            errors="replace"
+        )
         last_activity = time.monotonic()
         try:
-            tty.setraw(fd)
+            # Publish the prompt only after raw mode is active. tty.setraw's
+            # default TCSAFLUSH would otherwise discard input typed in the
+            # small interval between drawing the prompt and entering raw mode.
+            tty.setraw(fd, when=termios.TCSANOW)
+            sys.stdout.write(
+                f"\033[{terminal_height - 1};1H\033[2K{prompt}"
+            )
+            sys.stdout.flush()
             while True:
-                if select.select([sys.stdin], [], [], 0.1)[0]:
-                    ch = sys.stdin.read(1)
+                if select.select([fd], [], [], 0.1)[0]:
+                    raw = real_os.read(fd, 1)
+                    if not raw:
+                        return "exit"
+                    ch = decoder.decode(raw)
+                    if not ch:
+                        continue
                     last_activity = time.monotonic()
                     if ch in ('\r', '\n'):
                         h = shutil.get_terminal_size().lines
@@ -244,7 +259,16 @@ class LineEditor:
                     elif ch == '\t':
                         self._handle_tab()
                     elif ch == '\x1b':
-                        seq = sys.stdin.read(2)
+                        sequence = bytearray()
+                        sequence_deadline = time.monotonic() + 0.1
+                        while len(sequence) < 2:
+                            remaining = sequence_deadline - time.monotonic()
+                            if remaining <= 0 or not select.select(
+                                [fd], [], [], remaining
+                            )[0]:
+                                break
+                            sequence.extend(real_os.read(fd, 2 - len(sequence)))
+                        seq = sequence.decode("ascii", "ignore")
                         if seq == '[A':
                             if self.history_pos > 0:
                                 self.history_pos -= 1

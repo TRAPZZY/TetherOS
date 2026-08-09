@@ -11,6 +11,8 @@ import time
 
 SESSION_PASSWORD = "TRAP-HUB-Test-Session-2026!"
 INVALID_PASSWORD = "Wrong-Password-2026!"
+SHELL_PROMPT_PATTERN = r"\x1b\[[0-9;]*m>\x1b\[[0-9;]*m "
+SCHEDULER_READY_PATTERN = r"Scheduler started -- rotating IP every \d+s"
 
 
 class RedactingTranscript:
@@ -76,6 +78,12 @@ def _send_monitor_text(monitor_path, text):
         monitor.sendall(b"sendkey ret 20\n")
 
 
+def _send_serial_line(child, text, delay=0.01):
+    """Pace UART input so QEMU cannot overrun and truncate a command."""
+    child.send_slow(delay, text)
+    child.sendline("")
+
+
 def _wait_for_guest_path(child, path, *, label, exists=True, attempts=45):
     expected = "PRESENT" if exists else "ABSENT"
     for _attempt in range(attempts):
@@ -83,7 +91,7 @@ def _wait_for_guest_path(child, path, *, label, exists=True, attempts=45):
             "import os; print(" + repr(label) + " + "
             f"('_PRESENT' if os.path.exists({path!r}) else '_ABSENT'))"
         )
-        child.sendline(f'python3 -c "{code}"')
+        _send_serial_line(child, f'python3 -c "{code}"')
         child.expect(rf"\r?\n{label}_(PRESENT|ABSENT)\r?\n", timeout=10)
         if child.match.group(1) == expected:
             return
@@ -186,37 +194,40 @@ def run_smoke(
     child.logfile_read = transcript
     try:
         child.expect("TRAP HUB // SECURE SESSION SETUP")
-        child.sendline("")
+        _send_serial_line(child, "")
         child.expect("(?i)new password")
-        child.sendline(SESSION_PASSWORD)
+        _send_serial_line(child, SESSION_PASSWORD)
         child.expect("(?i)retype password")
-        child.sendline(SESSION_PASSWORD)
+        _send_serial_line(child, SESSION_PASSWORD)
         child.expect("TRAP HUB session password configured")
         child.expect("(?i)password:")
-        child.sendline(INVALID_PASSWORD)
+        _send_serial_line(child, INVALID_PASSWORD)
         child.expect("(?i)login incorrect")
         child.expect("(?i)password:")
-        child.sendline(SESSION_PASSWORD)
+        _send_serial_line(child, SESSION_PASSWORD)
         child.expect("SECURE TERMINAL")
+        child.expect(SCHEDULER_READY_PATTERN)
+        child.expect(SHELL_PROMPT_PATTERN)
         boot_elapsed = _enforce_boot_budget(started, boot_budget)
         print(f"TRAP HUB boot-to-shell: {boot_elapsed:.1f}s")
 
-        child.sendline("deck --json")
+        _send_serial_line(child, "deck --json")
         child.expect('"command_count"')
         child.expect('"lock_ready": true')
 
-        child.sendline("cat /etc/tether-edition")
+        _send_serial_line(child, "cat /etc/tether-edition")
         child.expect(rf"\r?\n{edition}\r?\n")
 
         if edition == "desktop":
-            child.sendline("which weston")
+            _send_serial_line(child, "which weston")
             child.expect("/usr/bin/weston")
-            child.sendline(
+            _send_serial_line(
+                child,
                 'python3 -c "import gi; gi.require_version(\'Gtk\', \'3.0\'); '
                 'from gi.repository import Gtk; print(\'GTK_READY\')"'
             )
             child.expect("GTK_READY")
-            child.sendline("ls /dev/dri/card0")
+            _send_serial_line(child, "ls /dev/dri/card0")
             child.expect("/dev/dri/card0")
 
             _wait_for_guest_path(
@@ -234,7 +245,8 @@ def run_smoke(
             # Exercise the real desktop lock path: signal the trusted session
             # supervisor, prove the realized GUI disappears, unlock vlock on
             # tty1, and prove Weston/GTK return.
-            child.sendline(
+            _send_serial_line(
+                child,
                 'python3 -c "import os,signal; '
                 "os.kill(int(open('/run/user/1000/trap-hub-desktop.pid').read()), "
                 'signal.SIGUSR1)"'
@@ -273,20 +285,22 @@ def run_smoke(
             if screenshot_path:
                 _capture_framebuffer(monitor_path, screenshot_path)
 
-        child.sendline("which vlock")
+        _send_serial_line(child, "which vlock")
         child.expect("/usr/bin/vlock")
 
         # Serial consoles cannot use VT_LOCKSWITCH. TRAP HUB locks them by
         # ending the session, after which getty/login must re-authenticate.
-        child.sendline("lock")
+        _send_serial_line(child, "lock")
         child.expect("(?i)password:")
-        child.sendline(INVALID_PASSWORD)
+        _send_serial_line(child, INVALID_PASSWORD)
         child.expect("(?i)login incorrect")
         child.expect("(?i)password:")
-        child.sendline(SESSION_PASSWORD)
+        _send_serial_line(child, SESSION_PASSWORD)
         child.expect("SECURE TERMINAL")
+        child.expect(SCHEDULER_READY_PATTERN)
+        child.expect(SHELL_PROMPT_PATTERN)
 
-        child.sendline("exit")
+        _send_serial_line(child, "exit")
         child.expect("(?i)password:")
         return 0
     except Exception as exc:
