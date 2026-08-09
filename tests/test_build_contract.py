@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 from app.version import __version__
 
@@ -72,6 +73,7 @@ def test_build_defines_locked_non_root_session_and_authentication_features():
 
     assert "tether 1000 tether 1000 * /home/tether /usr/bin/tether-session" in users
     assert "CONFIG_FEATURE_DEFAULT_PASSWD_ALGO=\"sha512\"" in busybox
+    assert "CONFIG_ASH_READ_TIMEOUT=y" in busybox
     for option in ("CONFIG_GETTY=y", "CONFIG_LOGIN=y", "CONFIG_PASSWD=y", "CONFIG_VLOCK=y"):
         assert option in busybox
     assert "# BR2_TARGET_ENABLE_ROOT_LOGIN is not set" in builder
@@ -105,6 +107,9 @@ def test_getty_uses_fixed_account_greeter_and_standard_login():
     assert "getty -L -n -l /usr/bin/tether-login 115200 ttyS0 vt100" in inittab
     assert "passwd tether" in greeter
     assert "exec /bin/login tether" in greeter
+    assert "read -r -t 1" in greeter
+    assert "TRAP HUB local login ready" in greeter
+    assert "trap-hub-local-login.ready" in greeter
 
 
 def test_privilege_broker_has_an_explicit_two_action_allowlist():
@@ -146,6 +151,8 @@ def test_desktop_session_is_kiosk_scoped_and_falls_back_to_core():
     assert "weston --tty=1" in desktop
     assert "trap request_lock USR1" in desktop
     assert "vlock -a </dev/tty1" in desktop
+    assert "TETHER_GUI_READY_FILE" in desktop
+    assert "trap-hub-lock.active" in desktop
     assert "shell=kiosk-shell.so" in weston
     assert "path=/usr/bin/tether-gui" in weston
 
@@ -161,7 +168,36 @@ def test_desktop_kernel_fragment_enables_drm_and_input():
 
 
 def test_ci_builds_and_boots_both_editions():
+    builder = (ROOT / "scripts" / "build-distro.sh").read_text()
     workflow = (ROOT / ".github" / "workflows" / "build-images.yml").read_text()
     assert "edition: [core, desktop]" in workflow
     assert "scripts/qemu-smoke.py" in workflow
     assert '--edition "${{ matrix.edition }}"' in workflow
+    assert "--boot-budget 180" in workflow
+    assert '--screenshot "$RUNNER_TEMP/tether-os-${{ matrix.edition }}.ppm"' in workflow
+    assert "utils/generate-cyclonedx" in builder
+    assert '"tether-os-$TETHER_EDITION.sha256"' in builder
+    assert 'sha256sum -c "tether-os-${{ matrix.edition }}.sha256"' in workflow
+    assert ".sbom.cdx.json" in workflow
+    assert "actions/attest@" in workflow
+    assert "id-token: write" in workflow
+    assert "attestations: write" in workflow
+    assert "aquasecurity/trivy-action@" in workflow
+    assert "severity: HIGH,CRITICAL" in workflow
+    assert "Enforce high-severity vulnerability gate" in workflow
+
+
+def test_ci_actions_are_pinned_to_immutable_commit_shas():
+    for workflow_path in (ROOT / ".github" / "workflows").glob("*.yml"):
+        for line in workflow_path.read_text().splitlines():
+            if "uses:" not in line:
+                continue
+            assert re.search(r"uses:\s+[^\s@]+@[0-9a-f]{40}(?:\s|$)", line), (
+                f"mutable action reference in {workflow_path.name}: {line.strip()}"
+            )
+
+
+def test_quick_rebuild_cannot_drift_from_the_supported_builder():
+    rebuild = (ROOT / "scripts" / "rebuild.sh").read_text()
+    assert 'exec "$SCRIPT_DIR/build-distro.sh"' in rebuild
+    assert "2024.02.3" not in rebuild

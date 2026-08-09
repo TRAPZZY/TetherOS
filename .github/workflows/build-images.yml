@@ -13,9 +13,14 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   build:
+    env:
+      BUILDROOT_DIR: ${{ runner.temp }}/buildroot-2025.02.16
+      BUILDROOT_IMAGES: ${{ runner.temp }}/buildroot-2025.02.16/output/images
     strategy:
       fail-fast: false
       matrix:
@@ -23,13 +28,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ~/buildroot-2025.02.16/dl
+          path: ${{ env.BUILDROOT_DIR }}/dl
           key: buildroot-2025.02.16-${{ matrix.edition }}-${{ hashFiles('buildroot-external-tether/**', 'scripts/build-distro.sh') }}
           restore-keys: |
             buildroot-2025.02.16-${{ matrix.edition }}-
@@ -39,19 +44,56 @@ jobs:
           TETHER_EDITION: ${{ matrix.edition }}
         run: bash scripts/build-distro.sh
       - name: Verify edition marker
-        run: test "$(cat "$HOME/buildroot-2025.02.16/output/images/tether-os.edition")" = "${{ matrix.edition }}"
+        run: |
+          test "$(cat "$BUILDROOT_IMAGES/tether-os.edition")" = "${{ matrix.edition }}"
+          cd "$BUILDROOT_IMAGES"
+          sha256sum -c "tether-os-${{ matrix.edition }}.sha256"
+      - name: Scan shipped dependency inventory
+        id: vulnerability_scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: sbom
+          scan-ref: ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.sbom.cdx.json
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+          format: json
+          output: ${{ runner.temp }}/tether-os-${{ matrix.edition }}.vulnerabilities.json
       - name: Boot image and exercise login/lock contracts
         run: |
           python -m pip install pexpect
           python scripts/qemu-smoke.py \
-            "$HOME/buildroot-2025.02.16/output/images/tether-os.iso" \
-            --edition "${{ matrix.edition }}"
-      - uses: actions/upload-artifact@v4
+            "$BUILDROOT_IMAGES/tether-os.iso" \
+            --edition "${{ matrix.edition }}" \
+            --boot-budget 180 \
+            --screenshot "$RUNNER_TEMP/tether-os-${{ matrix.edition }}.ppm"
+      - name: Enforce high-severity vulnerability gate
+        if: steps.vulnerability_scan.outcome == 'failure'
+        run: |
+          echo "High or critical vulnerabilities were reported; release is blocked."
+          exit 1
+      - name: Attest image build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ env.BUILDROOT_IMAGES }}/tether-os.iso
+      - name: Attest image SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ env.BUILDROOT_IMAGES }}/tether-os.iso
+          sbom-path: ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.sbom.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: tether-os-${{ matrix.edition }}
           path: |
-            ~/buildroot-2025.02.16/output/images/tether-os.iso
-            ~/buildroot-2025.02.16/output/images/tether-os.edition
+            ${{ env.BUILDROOT_IMAGES }}/tether-os.iso
+            ${{ env.BUILDROOT_IMAGES }}/tether-os.edition
+            ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.sha256
+            ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.buildroot-info.json
+            ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.sbom.cdx.json
+            ${{ runner.temp }}/tether-os-${{ matrix.edition }}.vulnerabilities.json
+            ${{ runner.temp }}/tether-os-${{ matrix.edition }}.ppm
           if-no-files-found: error
           retention-days: 14

@@ -98,14 +98,16 @@ python -m app.entrypoint
   kiosk and GTK/PyGObject Command Deck. Core remains dependency-light and is
   the default.
 
-See [the Shell 2 engineering plan](doc/SHELL_2_PLAN.md) and
-[secure-session design](doc/SECURE_SESSION.md).
+See [the Shell 2 engineering plan](doc/SHELL_2_PLAN.md),
+[secure-session design](doc/SECURE_SESSION.md),
+[threat model](doc/THREAT_MODEL.md), and
+[release acceptance checklist](doc/RELEASE_ACCEPTANCE.md).
 
 ### Core
 
 - **Automatic Tor IP rotation** — Rotates exit node every 60 seconds via `SIGNAL NEWNYM`, verified through multiple IP check services
 - **90+ built-in commands** — Recon, exploitation, forensics, web scanning, wireless, cron, anonymity tools — all self-contained
-- **Bootable Linux ISO** — 27MB ISOLINUX ISO with custom Linux 6.1.44 kernel, boots entirely in RAM
+- **Bootable Linux ISO** — ISOLINUX live image with a Linux 6.12.27 kernel, booting entirely in RAM
 - **iptables kill switch** — Fail-closed boot-image firewall that permits external traffic only for the Tor service account
 - **Tor on boot** — Tor daemon auto-starts, SOCKS5 proxy on `:9050`, control port on `:9051`
 - **Cross-platform** — Pure Python 3.7+, runs on Windows (native), Linux, macOS
@@ -152,7 +154,7 @@ See [the Shell 2 engineering plan](doc/SHELL_2_PLAN.md) and
 |                        |                               |
 |  +-------------------------------------------------+  |
 |  | OPERATING SYSTEM  (Buildroot Linux)              |  |
-|  | Kernel 6.1.44 | Busybox | iptables | Python 3    |  |
+|  | Kernel 6.12.27 | BusyBox | iptables | Python 3   |  |
 |  | Boot: ISOLINUX -> initramfs -> /init -> tether   |  |
 |  +-------------------------------------------------+  |
 +-------------------------------------------------------+
@@ -166,7 +168,7 @@ SeaBIOS
 ISOLINUX (from ISO)
   |  Loads bzImage + rootfs.cpio.gz
   v
-Linux Kernel 6.1.44
+Linux Kernel 6.12.27
   |  Unpacks initramfs into tmpfs
   |  Runs /init (custom PID 1 script)
   v
@@ -197,7 +199,7 @@ Tether OS Shell (REPL)
 | `kernel/probe.py` | External IP verification via Tor SOCKS5 |
 | `kernel/scheduler.py` | Background rotation scheduler |
 | `scripts/build-distro.sh` | Full Buildroot ISO build automation |
-| `scripts/rebuild.sh` | Quick ISO rebuild |
+| `scripts/rebuild.sh` | Cached rebuild through the canonical image builder |
 | `scripts/install.ps1` | Windows desktop installer |
 | `scripts/install.sh` | Linux/macOS desktop installer |
 | `wordlists/` | Built-in passwords, usernames, subdomains |
@@ -379,10 +381,12 @@ make -j$(nproc)
 
 ```
 output/images/
-  bzImage          5.2M   Linux kernel 6.1.44
-  rootfs.cpio.gz   21M    Initramfs (compressed root filesystem)
-  rootfs.ext2      500M   Ext2 rootfs image
-  tether-os.iso    27M    Bootable ISOLINUX ISO
+  bzImage                              Linux 6.12.27 kernel
+  rootfs.cpio.gz                       Buildroot-generated initramfs
+  tether-os.iso                        Bootable ISOLINUX image
+  tether-os-<edition>.sha256           Release digest manifest
+  tether-os-<edition>.buildroot-info.json
+  tether-os-<edition>.sbom.cdx.json    CycloneDX dependency inventory
 ```
 
 ---
@@ -428,7 +432,9 @@ python -m pytest tests/
 python -m pytest tests/ --cov=app --cov=kernel --cov=lib
 ```
 
-96 tests covering the control layer, network adapters, commands, shell engine, virtual filesystem, configuration, and Buildroot contracts.
+The complete regression suite covers the control layer, network adapters,
+commands, shell engine, virtual filesystem, authentication/lock contracts,
+graphical adapter, configuration, and Buildroot image gates.
 
 ---
 

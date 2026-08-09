@@ -23,6 +23,16 @@
 - Changed ISO assembly to consume Buildroot's fakeroot-generated CPIO image so
   custom users, numeric ownership, device metadata, and SUID permissions are
   present in the booted system.
+- Added CycloneDX SBOMs, Buildroot package inventories, release checksums, and
+  checksum verification in the image gate.
+- Image CI pins official actions to immutable revisions and creates signed
+  GitHub build-provenance and SBOM attestations.
+- A pinned Trivy SBOM scan now blocks release on reported high or critical
+  vulnerabilities while retaining its machine-readable report for diagnosis.
+- QEMU now rejects incorrect login/unlock passwords, enforces a boot-to-shell
+  budget, exercises the realized Desktop lock lifecycle, and validates a
+  nonblank graphical framebuffer.
+- Added an explicit threat model and separate physical Desktop acceptance gate.
 
 ## v1.1.2 (2026-08-05)
 

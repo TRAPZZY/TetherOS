@@ -33,7 +33,13 @@ Hardware / QEMU
   phase, where users, ownership, devices, and special permission bits become
   part of the boot artifact;
 - generates either the default `core` image or optional `desktop` image;
-- saves the generated defconfig and produces an ISOLINUX ISO.
+- saves the generated defconfig and produces an ISOLINUX ISO;
+- emits a CycloneDX package SBOM, Buildroot package metadata, and SHA-256
+  checksums for every release artifact.
+
+The image workflow scans the shipped CycloneDX inventory for high and critical
+vulnerabilities, blocks attestation when that gate fails, and signs both build
+provenance and the SBOM for passing ISOs through GitHub/Sigstore.
 
 The Desktop edition adds musl, eudev, Mesa/EGL, DRM/KMS input drivers,
 Weston kiosk shell, seatd, GTK 3, PyGObject, and fonts. Core intentionally does
@@ -127,8 +133,12 @@ handled explicitly.
 2. Static Buildroot contract tests and Python bytecode compilation.
 3. Clean Ubuntu builds for Core and Desktop in GitHub Actions.
 4. QEMU boot tests for password enrollment, login, edition dependencies,
-   Command Deck state, locking, and re-authentication.
+   Command Deck state, incorrect-password rejection, locking,
+   re-authentication, boot budget, and Desktop framebuffer output.
 5. Physical hardware acceptance before Desktop leaves feasibility status.
+
+The release threat analysis is maintained in `THREAT_MODEL.md`; automated and
+physical promotion evidence is tracked in `RELEASE_ACCEPTANCE.md`.
 
 The exact delivery gates and follow-on work are tracked in
 `SHELL_2_PLAN.md`.

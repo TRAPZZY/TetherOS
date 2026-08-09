@@ -1,14 +1,14 @@
 #!/bin/bash
 # Build Tether OS Linux Distribution
 # Run on Ubuntu, Debian, or an equivalent Linux build host.
-set -eu
+set -euo pipefail
 
 TETHER_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TETHER_VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$TETHER_ROOT/app/version.py")"
 BUILDROOT_VERSION="2025.02.16"
 BUILDROOT_ARCHIVE="buildroot-$BUILDROOT_VERSION.tar.xz"
 BUILDROOT_SHA256="15305e3d366eeaf4a5ecaf2ed42f685fd6af7fe5dbf1f62e1de5f46ee83225e2"
-BUILDROOT_DIR="$HOME/buildroot-$BUILDROOT_VERSION"
+BUILDROOT_DIR="${BUILDROOT_DIR:-$HOME/buildroot-$BUILDROOT_VERSION}"
 TETHER_EDITION="${TETHER_EDITION:-core}"
 
 case "$TETHER_EDITION" in
@@ -43,14 +43,15 @@ sudo apt-get install -y -qq \
 
 # Step 2: Download Buildroot
 echo "[2/6] Downloading Buildroot $BUILDROOT_VERSION..."
-if [ ! -d "$BUILDROOT_DIR" ]; then
+if [ ! -f "$BUILDROOT_DIR/Makefile" ]; then
     BUILDROOT_DOWNLOAD="$(mktemp "/tmp/$BUILDROOT_ARCHIVE.XXXXXX")"
     trap 'rm -f "$BUILDROOT_DOWNLOAD"' EXIT INT TERM
     curl --fail --location --retry 3 --retry-delay 2 \
         "https://buildroot.org/downloads/$BUILDROOT_ARCHIVE" \
         --output "$BUILDROOT_DOWNLOAD"
     printf '%s  %s\n' "$BUILDROOT_SHA256" "$BUILDROOT_DOWNLOAD" | sha256sum -c -
-    tar xf "$BUILDROOT_DOWNLOAD" -C "$HOME"
+    mkdir -p "$BUILDROOT_DIR"
+    tar xf "$BUILDROOT_DOWNLOAD" --strip-components=1 -C "$BUILDROOT_DIR"
     rm -f "$BUILDROOT_DOWNLOAD"
     trap - EXIT INT TERM
 fi
@@ -197,6 +198,27 @@ echo "       This will take 15-30 minutes on first build."
 echo "       Subsequent builds are much faster."
 echo ""
 make BR2_EXTERNAL="$EXTERNAL_PATH" -j"$(nproc)"
+
+# Produce auditable release metadata from the exact configured package graph.
+# Buildroot's native generator emits a standards-based CycloneDX SBOM.
+IMAGE_DIR="$BUILDROOT_DIR/output/images"
+make -s BR2_EXTERNAL="$EXTERNAL_PATH" show-info > \
+    "$IMAGE_DIR/tether-os-$TETHER_EDITION.buildroot-info.json"
+make -s BR2_EXTERNAL="$EXTERNAL_PATH" show-info | \
+    utils/generate-cyclonedx > \
+    "$IMAGE_DIR/tether-os-$TETHER_EDITION.sbom.cdx.json"
+
+(
+    cd "$IMAGE_DIR"
+    sha256sum \
+        bzImage \
+        rootfs.cpio.gz \
+        tether-os.iso \
+        tether-os.edition \
+        "tether-os-$TETHER_EDITION.buildroot-info.json" \
+        "tether-os-$TETHER_EDITION.sbom.cdx.json" > \
+        "tether-os-$TETHER_EDITION.sha256"
+)
 
 # Step 5: Verify
 echo "[5/6] Build complete!"

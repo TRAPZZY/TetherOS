@@ -7,6 +7,7 @@ session locker, never this UI.
 
 from dataclasses import dataclass
 import importlib.util
+import os
 import sys
 import time
 
@@ -23,6 +24,28 @@ class GuiCommandResponse:
 
 def gui_available():
     return importlib.util.find_spec("gi") is not None
+
+
+def publish_ready_marker(path):
+    """Publish GUI readiness without following attacker-controlled symlinks."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        else:
+            os.chmod(path, 0o600)
+        os.write(descriptor, b"TRAP_HUB_GUI_READY\n")
+    finally:
+        os.close(descriptor)
+
+
+def clear_ready_marker(path):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
 
 
 class CommandDeckController:
@@ -195,7 +218,16 @@ class GtkCommandDeck:
     def run(self):
         self.window.show_all()
         self.entry.grab_focus()
-        self.Gtk.main()
+        while self.Gtk.events_pending():
+            self.Gtk.main_iteration_do(False)
+        ready_file = os.environ.get("TETHER_GUI_READY_FILE")
+        if ready_file:
+            publish_ready_marker(ready_file)
+        try:
+            self.Gtk.main()
+        finally:
+            if ready_file:
+                clear_ready_marker(ready_file)
         return 0
 
 
