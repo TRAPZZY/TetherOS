@@ -88,13 +88,13 @@ def _send_serial_line(child, text, delay=0.01):
 
 
 def _console_line_pattern(text):
-    """Match console lines across LF, CRLF, and nested PTY CR translation."""
-    return rf"\r*\n{re.escape(text)}\r*\n"
+    """Match a rendered console value across terminal newline translation."""
+    return rf"{re.escape(text)}\r*\n"
 
 
 def _guest_path_pattern(label):
     """Match a marker probe while retaining its PRESENT/ABSENT state."""
-    return rf"\r*\n{re.escape(label)}_(PRESENT|ABSENT)\r*\n"
+    return rf"{re.escape(label)}_(PRESENT|ABSENT)\r*\n"
 
 
 def _wait_for_guest_path(child, path, *, label, exists=True, attempts=45):

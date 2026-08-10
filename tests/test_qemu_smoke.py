@@ -76,11 +76,12 @@ def test_serial_lines_are_paced_before_their_terminator(monkeypatch):
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r\r\n"])
 def test_console_line_pattern_accepts_terminal_newline_translation(newline):
-    rendered = f"prompt{newline}core{newline}next"
+    rendered = f"cat /etc/tether-edition\x1b[22;1Hcore{newline}next"
     assert re.search(QEMU_SMOKE._console_line_pattern("core"), rendered)
 
 
 def test_guest_path_pattern_accepts_nested_pty_translation_and_captures_state():
-    match = re.search(QEMU_SMOKE._guest_path_pattern("GUI"), "\r\r\nGUI_PRESENT\r\r\n")
+    rendered = "probe expression\x1b[22;1HGUI_PRESENT\r\r\n"
+    match = re.search(QEMU_SMOKE._guest_path_pattern("GUI"), rendered)
     assert match
     assert match.group(1) == "PRESENT"
