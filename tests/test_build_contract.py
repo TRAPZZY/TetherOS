@@ -72,6 +72,7 @@ def test_build_defines_locked_non_root_session_and_authentication_features():
     builder = (ROOT / "scripts" / "build-distro.sh").read_text()
 
     assert "tether 1000 tether 1000 * /home/tether /usr/bin/tether-session" in users
+    assert "tor 990 tor 990 * /var/lib/tor /bin/false - Tor_daemon" in users
     assert "CONFIG_FEATURE_DEFAULT_PASSWD_ALGO=\"sha512\"" in busybox
     assert "CONFIG_ASH_READ_TIMEOUT=y" in busybox
     for option in ("CONFIG_GETTY=y", "CONFIG_LOGIN=y", "CONFIG_PASSWD=y", "CONFIG_VLOCK=y"):
@@ -79,6 +80,29 @@ def test_build_defines_locked_non_root_session_and_authentication_features():
     assert "# BR2_TARGET_ENABLE_ROOT_LOGIN is not set" in builder
     assert "BR2_ROOTFS_USERS_TABLES" in builder
     assert "BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES" in builder
+
+
+def test_boot_requires_fail_closed_firewall_and_unprivileged_tor_service():
+    overlay = (
+        ROOT / "buildroot-external-tether" / "board" / "tether" /
+        "rootfs_overlay" / "etc" / "init.d"
+    )
+    firewall = (overlay / "S01iptables").read_text()
+    tor_service = (overlay / "S03tor").read_text()
+    boot = (overlay / "rcS").read_text()
+    smoke = (ROOT / "scripts" / "qemu-smoke.py").read_text()
+
+    assert "set -e" in firewall
+    assert 'iptables -w -P OUTPUT DROP' in firewall
+    assert '--uid-owner "$TOR_UID"' in firewall
+    assert "set -e" in tor_service
+    assert "id -u tor" in tor_service
+    assert 'kill -0 "$tor_pid"' in tor_service
+    assert "firewall_ready=0" in boot
+    assert "restricted mode" in boot
+    assert 'child.expect("Tether OS ready.")' in smoke
+    for command in ("id -u tor", "pidof tor", "netstat -lnt"):
+        assert command in smoke
 
 
 def test_iso_uses_buildroot_fakeroot_image_for_users_and_ownership():

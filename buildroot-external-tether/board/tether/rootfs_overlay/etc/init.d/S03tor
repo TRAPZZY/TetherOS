@@ -2,7 +2,12 @@
 # Tor daemon startup
 case "$1" in
     start)
-        echo "  [OK] Starting Tor..."
+        set -e
+        echo "  [....] Starting Tor..."
+        if ! id -u tor >/dev/null 2>&1; then
+            echo "  [FAIL] Tor service account is missing"
+            exit 1
+        fi
         mkdir -p /var/log/tor /var/lib/tor /run/tor
         chown -R tor:tor /var/log/tor /var/lib/tor /run/tor
         chmod 700 /var/lib/tor /run/tor
@@ -11,9 +16,16 @@ case "$1" in
             exit 1
         fi
         tor -f /etc/tor/torrc &
+        tor_pid="$!"
+        sleep 1
+        if ! kill -0 "$tor_pid" 2>/dev/null; then
+            echo "  [FAIL] Tor exited during startup"
+            exit 1
+        fi
+        echo "  [OK] Tor daemon running as the unprivileged tor account."
         ;;
     stop)
-        killall tor 2>/dev/null
+        killall tor 2>/dev/null || true
         echo "  [OK] Tor stopped"
         ;;
     restart)

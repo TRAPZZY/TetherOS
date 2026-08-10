@@ -206,6 +206,7 @@ def run_smoke(
     transcript = RedactingTranscript(SESSION_PASSWORD)
     child.logfile_read = transcript
     try:
+        child.expect("Tether OS ready.")
         child.expect("TRAP HUB // SECURE SESSION SETUP")
         _send_serial_line(child, "")
         child.expect("(?i)new password")
@@ -227,6 +228,13 @@ def run_smoke(
         _send_serial_line(child, "deck --json")
         child.expect('"command_count"')
         child.expect('"lock_ready": true')
+
+        _send_serial_line(child, "id -u tor")
+        child.expect(r"([1-9][0-9]*)\r*\n")
+        _send_serial_line(child, "pidof tor")
+        child.expect(r"[1-9][0-9]*(?: [1-9][0-9]*)*\r*\n")
+        _send_serial_line(child, "netstat -lnt")
+        child.expect(r"127\.0\.0\.1:9050")
 
         _send_serial_line(child, "cat /etc/tether-edition")
         child.expect(_console_line_pattern(edition))

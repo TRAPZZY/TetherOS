@@ -28,10 +28,35 @@ ip link set lo up
 dmesg -n 1
 
 echo "Starting services..."
+service_failures=0
+firewall_ready=0
 for i in /etc/init.d/S*; do
     if [ -x "$i" ]; then
-        "$i" start
+        case "$i" in
+            */S01iptables)
+                if "$i" start; then
+                    firewall_ready=1
+                else
+                    service_failures=1
+                fi
+                ;;
+            */S02network|*/S03tor)
+                if [ "$firewall_ready" -eq 1 ]; then
+                    "$i" start || service_failures=1
+                else
+                    echo "  [FAIL] Skipping $(basename "$i") because the kill switch is unavailable"
+                    service_failures=1
+                fi
+                ;;
+            *)
+                "$i" start || service_failures=1
+                ;;
+        esac
     fi
 done
 
-echo "Tether OS ready."
+if [ "$service_failures" -eq 0 ]; then
+    echo "Tether OS ready."
+else
+    echo "Tether OS restricted mode: one or more critical services failed."
+fi
