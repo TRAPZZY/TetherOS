@@ -143,6 +143,7 @@ def test_desktop_session_is_kiosk_scoped_and_falls_back_to_core():
     desktop = (overlay / "usr" / "bin" / "tether-desktop").read_text()
     weston = (overlay / "etc" / "xdg" / "weston" / "weston.ini").read_text()
 
+    assert "export TETHER_BOOT_IMAGE=1" in session
     assert "/etc/tether-edition" in session
     assert '"/dev/tty1"' in session
     assert "TETHER_DESKTOP=1" in session

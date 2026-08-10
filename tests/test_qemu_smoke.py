@@ -51,15 +51,30 @@ def test_shell_prompt_pattern_waits_for_the_interactive_prompt():
     )
 
 
-def test_serial_lines_are_paced_before_their_terminator():
+def test_serial_lines_are_paced_before_their_terminator(monkeypatch):
     calls = []
 
     class Child:
-        def send_slow(self, delay, value):
-            calls.append(("slow", delay, value))
+        def send(self, value):
+            calls.append(("send", value))
 
-        def sendline(self, value):
-            calls.append(("line", value))
+    monkeypatch.setattr(
+        QEMU_SMOKE.time,
+        "sleep",
+        lambda delay: calls.append(("sleep", delay)),
+    )
 
-    QEMU_SMOKE._send_serial_line(Child(), "deck --json")
-    assert calls == [("slow", 0.01, "deck --json"), ("line", "")]
+    QEMU_SMOKE._send_serial_line(Child(), "go", delay=0.01)
+    assert calls == [
+        ("send", "g"),
+        ("sleep", 0.01),
+        ("send", "o"),
+        ("sleep", 0.01),
+        ("send", "\n"),
+    ]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r\r\n"])
+def test_console_line_pattern_accepts_terminal_newline_translation(newline):
+    rendered = f"prompt{newline}core{newline}next"
+    assert re.search(QEMU_SMOKE._console_line_pattern("core"), rendered)

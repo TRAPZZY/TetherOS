@@ -2,6 +2,7 @@
 
 import argparse
 from pathlib import Path
+import re
 import shutil
 import socket
 import sys
@@ -80,8 +81,15 @@ def _send_monitor_text(monitor_path, text):
 
 def _send_serial_line(child, text, delay=0.01):
     """Pace UART input so QEMU cannot overrun and truncate a command."""
-    child.send_slow(delay, text)
-    child.sendline("")
+    for character in text:
+        child.send(character)
+        time.sleep(delay)
+    child.send("\n")
+
+
+def _console_line_pattern(text):
+    """Match console lines across LF, CRLF, and nested PTY CR translation."""
+    return rf"\r*\n{re.escape(text)}\r*\n"
 
 
 def _wait_for_guest_path(child, path, *, label, exists=True, attempts=45):
@@ -216,7 +224,7 @@ def run_smoke(
         child.expect('"lock_ready": true')
 
         _send_serial_line(child, "cat /etc/tether-edition")
-        child.expect(rf"\r?\n{edition}\r?\n")
+        child.expect(_console_line_pattern(edition))
 
         if edition == "desktop":
             _send_serial_line(child, "which weston")

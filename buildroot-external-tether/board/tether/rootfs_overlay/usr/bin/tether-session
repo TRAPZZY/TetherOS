@@ -1,6 +1,11 @@
 #!/bin/sh
 # Select the validated TRAP HUB interface for this image edition.
 
+# BusyBox login intentionally sanitizes inherited variables. Re-establish the
+# image identity at the authenticated shell boundary so lock and power actions
+# use the hardened TetherOS backends instead of generic host fallbacks.
+export TETHER_BOOT_IMAGE=1
+
 session_tty="$(tty 2>/dev/null || true)"
 if [ "$(cat /etc/tether-edition 2>/dev/null)" = "desktop" ] && [ "$session_tty" = "/dev/tty1" ]; then
     export TETHER_DESKTOP=1
