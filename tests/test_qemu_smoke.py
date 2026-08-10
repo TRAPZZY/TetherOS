@@ -78,3 +78,9 @@ def test_serial_lines_are_paced_before_their_terminator(monkeypatch):
 def test_console_line_pattern_accepts_terminal_newline_translation(newline):
     rendered = f"prompt{newline}core{newline}next"
     assert re.search(QEMU_SMOKE._console_line_pattern("core"), rendered)
+
+
+def test_guest_path_pattern_accepts_nested_pty_translation_and_captures_state():
+    match = re.search(QEMU_SMOKE._guest_path_pattern("GUI"), "\r\r\nGUI_PRESENT\r\r\n")
+    assert match
+    assert match.group(1) == "PRESENT"

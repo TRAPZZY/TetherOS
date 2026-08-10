@@ -92,6 +92,11 @@ def _console_line_pattern(text):
     return rf"\r*\n{re.escape(text)}\r*\n"
 
 
+def _guest_path_pattern(label):
+    """Match a marker probe while retaining its PRESENT/ABSENT state."""
+    return rf"\r*\n{re.escape(label)}_(PRESENT|ABSENT)\r*\n"
+
+
 def _wait_for_guest_path(child, path, *, label, exists=True, attempts=45):
     expected = "PRESENT" if exists else "ABSENT"
     for _attempt in range(attempts):
@@ -100,7 +105,7 @@ def _wait_for_guest_path(child, path, *, label, exists=True, attempts=45):
             f"('_PRESENT' if os.path.exists({path!r}) else '_ABSENT'))"
         )
         _send_serial_line(child, f'python3 -c "{code}"')
-        child.expect(rf"\r?\n{label}_(PRESENT|ABSENT)\r?\n", timeout=10)
+        child.expect(_guest_path_pattern(label), timeout=10)
         if child.match.group(1) == expected:
             return
         time.sleep(1)
