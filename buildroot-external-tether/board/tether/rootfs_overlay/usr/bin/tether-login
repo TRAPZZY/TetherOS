@@ -52,6 +52,13 @@ if [ ! -f "$READY_FILE" ]; then
     fi
 fi
 
+# Password setup uses umask 077 for its state. Restore a system-directory umask
+# and make both levels of the XDG runtime hierarchy explicit: a 0700 /run/user
+# would make the correctly owned child unreachable by the authenticated user.
+umask 022
+mkdir -p /run/user
+chown root:root /run/user
+chmod 0755 /run/user
 mkdir -p /run/user/1000
 chown tether:tether /run/user/1000
 chmod 0700 /run/user/1000

@@ -110,6 +110,12 @@ def test_getty_uses_fixed_account_greeter_and_standard_login():
     assert "read -r -t 1" in greeter
     assert "TRAP HUB local login ready" in greeter
     assert "trap-hub-local-login.ready" in greeter
+    assert "chown root:root /run/user" in greeter
+    assert "chmod 0755 /run/user" in greeter
+    assert "chown tether:tether /run/user/1000" in greeter
+    assert "chmod 0700 /run/user/1000" in greeter
+    assert greeter.index("umask 022") < greeter.index("mkdir -p /run/user")
+    assert greeter.index("chmod 0755 /run/user") < greeter.index("mkdir -p /run/user/1000")
 
 
 def test_privilege_broker_has_an_explicit_two_action_allowlist():
@@ -144,6 +150,7 @@ def test_desktop_session_is_kiosk_scoped_and_falls_back_to_core():
     weston = (overlay / "etc" / "xdg" / "weston" / "weston.ini").read_text()
 
     assert "export TETHER_BOOT_IMAGE=1" in session
+    assert "umask 077" in session
     assert "/etc/tether-edition" in session
     assert '"/dev/tty1"' in session
     assert "TETHER_DESKTOP=1" in session
