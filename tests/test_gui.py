@@ -1,5 +1,6 @@
 import os
 import stat
+import sys
 from unittest.mock import patch
 
 from app.gui import (
@@ -33,6 +34,24 @@ def test_gui_controller_reports_parser_errors_without_crashing():
     response = controller.execute("echo 'unterminated")
     assert response.exit_code == 2
     assert "syntax error" in response.stdout
+
+
+def test_gui_lock_command_requests_the_trusted_lock_path():
+    shell = TetherShell()
+    with patch.object(shell._locker, "available", return_value=True):
+        response = CommandDeckController(shell).execute("lock")
+    assert response.lock_requested is True
+
+
+def test_gui_controller_starts_managed_external_jobs():
+    shell = TetherShell()
+    controller = CommandDeckController(shell)
+    response = controller.execute(
+        f'"{sys.executable}" -c "import time; time.sleep(0.1)" &'
+    )
+    assert response.exit_code == 0
+    assert "Job 1 started" in response.stdout
+    shell.jobs.shutdown()
 
 
 def test_entrypoint_routes_gui_mode_without_loading_interactive_shell():

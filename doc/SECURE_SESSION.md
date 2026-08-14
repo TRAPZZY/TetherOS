@@ -40,11 +40,25 @@ the greeter and `/bin/login` requires the password again.
 
 ### Desktop console
 
-The GTK process asks the same-user desktop supervisor to lock. The supervisor
-terminates Weston, releasing tty1, attaches `vlock -a` directly to tty1, and
-restarts Weston only after successful authentication. If the locker is
-missing or fails, the graphical session ends instead of reopening unlocked.
-Serial access to a Desktop image remains in Core mode for diagnostics.
+One long-lived, unprivileged shell backend owns `TetherShell`, its state, and
+managed jobs for the authenticated Desktop login. Disposable GTK clients use
+a mode-0600 Unix socket in the user's mode-0700 runtime directory. Linux
+`SO_PEERCRED` authenticates the peer; command and state RPC close before lock.
+Only a direct child of the recorded live Desktop supervisor can advance the
+lock state, which prevents another same-UID session from reopening it.
+
+The supervisor terminates Weston, releasing tty1, attaches `vlock -a` directly
+to tty1, and restarts Weston only after successful authentication. The new GTK
+client reconnects to the same backend, so shell state, uptime, and live jobs
+continue. If the backend, supervisor, or locker fails, the graphical session
+ends instead of reopening unlocked.
+
+Serial access to a Desktop image is a separate authenticated Core session for
+diagnostics. Like SSH on a multi-session Linux host, a serial session already
+authenticated before a local GUI lock is not itself ended by `vlock`; it
+cannot use the Desktop backend while locked. Exposed physical serial ports
+must therefore be access-controlled and must not be represented as protected
+by the local-display lock.
 
 ### Installed application on another OS
 
@@ -72,7 +86,8 @@ command executor.
 
 ## Known boundaries
 
-- This design protects unattended local/serial sessions; it is not full-disk
+- This design protects each unattended local or serial session through its own
+  lock/logout boundary; it is not a global multi-session freeze or full-disk
   encryption and does not protect RAM from an attacker with physical control.
 - Desktop support remains a feasibility edition until visual lock/unlock is
   accepted on QEMU-VNC and at least two representative physical GPU/input

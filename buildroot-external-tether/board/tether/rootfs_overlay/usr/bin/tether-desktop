@@ -11,18 +11,31 @@ export XDG_RUNTIME_DIR=/run/user/1000
 export GDK_BACKEND=wayland
 export NO_AT_BRIDGE=1
 export TETHER_GUI_READY_FILE="$XDG_RUNTIME_DIR/trap-hub-gui.ready"
+export TETHER_GUI_BACKEND_SOCKET="$XDG_RUNTIME_DIR/trap-hub-shell.sock"
+export PYTHONPATH=/usr/lib/tether-os${PYTHONPATH:+:${PYTHONPATH}}
 umask 077
 
 PID_FILE="$XDG_RUNTIME_DIR/trap-hub-desktop.pid"
 LOCK_REQUEST="$XDG_RUNTIME_DIR/trap-hub-lock"
 LOCK_ACTIVE="$XDG_RUNTIME_DIR/trap-hub-lock.active"
 weston_pid=""
+backend_pid=""
+watchdog_pid=""
 
 cleanup() {
     rm -f "$PID_FILE" "$LOCK_REQUEST" "$LOCK_ACTIVE" "$TETHER_GUI_READY_FILE"
     if [ -n "$weston_pid" ]; then
         kill "$weston_pid" 2>/dev/null || true
     fi
+    if [ -n "$watchdog_pid" ]; then
+        kill "$watchdog_pid" 2>/dev/null || true
+        wait "$watchdog_pid" 2>/dev/null || true
+    fi
+    if [ -n "$backend_pid" ]; then
+        kill "$backend_pid" 2>/dev/null || true
+        wait "$backend_pid" 2>/dev/null || true
+    fi
+    rm -f "$TETHER_GUI_BACKEND_SOCKET"
 }
 
 request_lock() {
@@ -33,17 +46,55 @@ request_lock() {
 }
 
 trap request_lock USR1
-trap cleanup EXIT INT TERM HUP
+trap cleanup EXIT
+trap 'exit 0' INT TERM HUP
 printf '%s\n' "$$" > "$PID_FILE"
 chmod 0600 "$PID_FILE"
+
+# The backend owns TetherShell and its managed subprocesses for this entire
+# authenticated login.  Weston and GTK are disposable presentation clients.
+python3 -m app.gui_backend \
+    --serve \
+    --supervisor-pid "$$" \
+    --socket "$TETHER_GUI_BACKEND_SOCKET" \
+    --lock-marker "$LOCK_ACTIVE" &
+backend_pid="$!"
+if ! python3 -m app.gui_backend \
+    --wait-ready 10 \
+    --socket "$TETHER_GUI_BACKEND_SOCKET" \
+    --lock-marker "$LOCK_ACTIVE"; then
+    echo "TRAP HUB persistent shell service failed; ending the desktop session."
+    exit 1
+fi
 
 while :; do
     rm -f "$LOCK_REQUEST" "$LOCK_ACTIVE" "$TETHER_GUI_READY_FILE"
     weston --tty=1 --config=/etc/xdg/weston/weston.ini &
     weston_pid="$!"
+    # Weston cannot directly supervise the separate shell owner.  End the
+    # graphical presentation if that security/state boundary ever disappears,
+    # rather than leaving an endlessly restarting but non-functional client.
+    (
+        while kill -0 "$weston_pid" 2>/dev/null; do
+            if ! kill -0 "$backend_pid" 2>/dev/null; then
+                kill "$weston_pid" 2>/dev/null || true
+                exit 1
+            fi
+            sleep 1
+        done
+    ) &
+    watchdog_pid="$!"
     wait "$weston_pid" || true
     weston_pid=""
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+    watchdog_pid=""
     rm -f "$TETHER_GUI_READY_FILE"
+
+    if ! kill -0 "$backend_pid" 2>/dev/null; then
+        echo "TRAP HUB persistent shell service stopped; ending the desktop session."
+        exit 1
+    fi
 
     if [ -f "$LOCK_REQUEST" ]; then
         rm -f "$LOCK_REQUEST"
@@ -52,15 +103,29 @@ while :; do
             exit 1
         fi
         : > "$LOCK_ACTIVE"
+        if ! python3 -m app.gui_backend \
+            --mark-lock-active \
+            --socket "$TETHER_GUI_BACKEND_SOCKET" \
+            --lock-marker "$LOCK_ACTIVE"; then
+            echo "TRAP HUB could not close the shell command gate; ending the desktop session."
+            exit 1
+        fi
         vlock -a </dev/tty1 >/dev/tty1 2>&1 || {
-            rm -f "$LOCK_ACTIVE"
             echo "TRAP HUB trusted lock failed; ending the desktop session."
             exit 1
         }
         rm -f "$LOCK_ACTIVE"
+        if ! python3 -m app.gui_backend \
+            --unlock \
+            --socket "$TETHER_GUI_BACKEND_SOCKET" \
+            --lock-marker "$LOCK_ACTIVE"; then
+            echo "TRAP HUB could not reopen the authenticated shell session."
+            exit 1
+        fi
         continue
     fi
 
     echo "TRAP HUB desktop ended; starting Core."
+    cleanup
     exec /usr/bin/tether
 done

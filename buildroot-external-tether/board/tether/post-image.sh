@@ -8,9 +8,10 @@ ISO_DIR="$BINARIES_DIR/iso_root"
 ISOHDPFX="/usr/lib/ISOLINUX/isohdpfx.bin"
 ISOLINUX_BIN="/usr/lib/ISOLINUX/isolinux.bin"
 LDLINUX_C32="/usr/lib/syslinux/modules/bios/ldlinux.c32"
+GRUB_MKSTANDALONE="${GRUB_MKSTANDALONE:-grub-mkstandalone}"
 
 rm -rf "$ISO_DIR"
-mkdir -p "$ISO_DIR/isolinux"
+mkdir -p "$ISO_DIR/isolinux" "$ISO_DIR/boot/grub"
 
 cp "$BINARIES_DIR/bzImage" "$ISO_DIR/"
 
@@ -42,13 +43,50 @@ LABEL tether
     APPEND $BOOT_ARGS
 CFG
 
+# Build an x86_64 UEFI fallback loader and place it in a FAT El Torito image.
+# The embedded GRUB configuration locates the ISO9660 root by its kernel file,
+# so the same image boots from optical media and raw USB storage.
+for tool in "$GRUB_MKSTANDALONE" mkfs.vfat mmd mcopy; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "ERROR: UEFI image dependency is unavailable: $tool" >&2
+        exit 1
+    fi
+done
+
+cat > "$ISO_DIR/boot/grub/grub.cfg" << CFG
+set default=0
+set timeout=0
+
+menuentry "Tether OS" {
+    search --no-floppy --file --set=root /bzImage
+    linux /bzImage $BOOT_ARGS
+    initrd /rootfs.cpio.gz
+}
+CFG
+
+EFI_LOADER="$ISO_DIR/boot/grub/BOOTX64.EFI"
+EFI_IMAGE="$ISO_DIR/boot/grub/efi.img"
+"$GRUB_MKSTANDALONE" \
+    --format=x86_64-efi \
+    --output="$EFI_LOADER" \
+    --modules="part_gpt part_msdos fat iso9660 search search_fs_file normal linux" \
+    "boot/grub/grub.cfg=$ISO_DIR/boot/grub/grub.cfg"
+dd if=/dev/zero of="$EFI_IMAGE" bs=1M count=8 status=none
+mkfs.vfat "$EFI_IMAGE" >/dev/null
+mmd -i "$EFI_IMAGE" ::/EFI ::/EFI/BOOT
+mcopy -i "$EFI_IMAGE" "$EFI_LOADER" ::/EFI/BOOT/BOOTX64.EFI
+rm -f "$EFI_LOADER"
+
 xorriso -as mkisofs \
     -o "$BINARIES_DIR/tether-os.iso" \
     -b isolinux/isolinux.bin \
     -c isolinux/boot.cat \
     -no-emul-boot -boot-load-size 4 -boot-info-table \
     -isohybrid-mbr "$ISOHDPFX" \
-    "$ISO_DIR" 2>/dev/null
+    -eltorito-alt-boot \
+    -e boot/grub/efi.img -no-emul-boot \
+    -isohybrid-gpt-basdat \
+    "$ISO_DIR"
 
 rm -rf "$ISO_DIR"
 

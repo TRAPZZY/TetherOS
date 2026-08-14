@@ -33,6 +33,13 @@
   budget, exercises the realized Desktop lock lifecycle, and validates a
   nonblank graphical framebuffer.
 - Added an explicit threat model and separate physical Desktop acceptance gate.
+- Added a persistent, peer-authenticated Desktop shell backend so GTK/Weston
+  lock restarts retain VFS state, session uptime, and managed jobs.
+- Added hybrid BIOS/UEFI optical and raw-USB media generation, structural
+  validation, and four-path QEMU boot gates.
+- Replaced the incomplete Buildroot vulnerability claim with a deterministic
+  runtime-only SBOM, pinned NVD evidence, fail-closed CVE coverage policy, and
+  defense-in-depth realized-rootfs scanning.
 
 ## v1.1.2 (2026-08-05)
 

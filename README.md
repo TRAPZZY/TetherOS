@@ -52,9 +52,11 @@ can enter the TRAP HUB shell.
 
 ### Write to USB
 
-```bash
-sudo dd if=tether-os.iso of=/dev/sdX bs=4M status=progress
-```
+Writing an image erases the entire destination device. Verify the CI artifact,
+GitHub attestation, edition, checksum manifest, and exact removable-device
+identity before writing anything. Follow the complete
+[physical installation and acceptance runbook](doc/PHYSICAL_TEST_RUNBOOK.md);
+do not use an unverified ISO or an unchecked one-line disk command.
 
 ### Desktop App (cross-platform)
 
@@ -107,7 +109,7 @@ See [the Shell 2 engineering plan](doc/SHELL_2_PLAN.md),
 
 - **Automatic Tor IP rotation** — Rotates exit node every 60 seconds via `SIGNAL NEWNYM`, verified through multiple IP check services
 - **90+ built-in commands** — Recon, exploitation, forensics, web scanning, wireless, cron, anonymity tools — all self-contained
-- **Bootable Linux ISO** — ISOLINUX live image with a Linux 6.12.27 kernel, booting entirely in RAM
+- **Bootable Linux ISO** — Hybrid BIOS/UEFI x86_64 live image with a Linux 6.12.27 kernel, booting entirely in RAM
 - **iptables kill switch** — Fail-closed boot-image firewall that permits external traffic only for the Tor service account
 - **Tor on boot** — Tor daemon auto-starts, SOCKS5 proxy on `:9050`, control port on `:9051`
 - **Cross-platform** — Pure Python 3.7+, runs on Windows (native), Linux, macOS
@@ -155,7 +157,7 @@ See [the Shell 2 engineering plan](doc/SHELL_2_PLAN.md),
 |  +-------------------------------------------------+  |
 |  | OPERATING SYSTEM  (Buildroot Linux)              |  |
 |  | Kernel 6.12.27 | BusyBox | iptables | Python 3   |  |
-|  | Boot: ISOLINUX -> initramfs -> /init -> tether   |  |
+|  | Boot: BIOS/UEFI -> initramfs -> /init -> tether  |  |
 |  +-------------------------------------------------+  |
 +-------------------------------------------------------+
 ```
@@ -163,10 +165,10 @@ See [the Shell 2 engineering plan](doc/SHELL_2_PLAN.md),
 ### Boot Sequence
 
 ```
-SeaBIOS
+Legacy BIOS -> ISOLINUX ----+
+                            |  Loads bzImage + rootfs.cpio.gz
+x86_64 UEFI -> GRUB EFI ----+
   |
-ISOLINUX (from ISO)
-  |  Loads bzImage + rootfs.cpio.gz
   v
 Linux Kernel 6.12.27
   |  Unpacks initramfs into tmpfs
@@ -182,6 +184,11 @@ Linux Kernel 6.12.27
   v
 Tether OS Shell (REPL)
 ```
+
+The image does not implement UEFI Secure Boot; Secure Boot must be disabled.
+The initial physical certification scope is wired Ethernet and selected Intel
+and AMD graphics systems. NVIDIA graphics and Wi-Fi boot networking are not yet
+claimed as supported. See the physical runbook before creating USB media.
 
 ### Key Files
 
@@ -200,8 +207,10 @@ Tether OS Shell (REPL)
 | `kernel/scheduler.py` | Background rotation scheduler |
 | `scripts/build-distro.sh` | Full Buildroot ISO build automation |
 | `scripts/rebuild.sh` | Cached rebuild through the canonical image builder |
+| `scripts/verify-release.py` | Fail-closed release-bundle checksum and format verifier |
 | `scripts/install.ps1` | Windows desktop installer |
 | `scripts/install.sh` | Linux/macOS desktop installer |
+| `doc/PHYSICAL_TEST_RUNBOOK.md` | Safe physical-media and hardware acceptance procedure |
 | `wordlists/` | Built-in passwords, usernames, subdomains |
 
 ---
@@ -340,7 +349,7 @@ Tether OS Shell (REPL)
 sudo apt install build-essential curl file flex bison \
     libncurses-dev libssl-dev libelf-dev bc cpio rsync \
     unzip wget git python3 python3-pip qemu-system-x86 \
-    xorriso
+    xorriso grub-efi-amd64-bin dosfstools mtools
 ```
 
 ### Full Build
@@ -383,10 +392,12 @@ make -j$(nproc)
 output/images/
   bzImage                              Linux 6.12.27 kernel
   rootfs.cpio.gz                       Buildroot-generated initramfs
-  tether-os.iso                        Bootable ISOLINUX image
+  tether-os.iso                        Hybrid BIOS/UEFI boot image
   tether-os-<edition>.sha256           Release digest manifest
   tether-os-<edition>.buildroot-info.json
   tether-os-<edition>.sbom.cdx.json    CycloneDX dependency inventory
+  tether-os-<edition>.cve.cdx.json     NVD-enriched runtime CVE analysis
+  tether-os-<edition>.nvd.json         Pinned NVD snapshot evidence
 ```
 
 ---

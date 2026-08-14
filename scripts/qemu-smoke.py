@@ -113,6 +113,17 @@ def _wait_for_guest_path(child, path, *, label, exists=True, attempts=45):
     raise RuntimeError(f"guest path did not {state}: {path}")
 
 
+def _require_guest_capability(child, code, *, label):
+    """Run a probe whose marker cannot be satisfied by terminal echo."""
+    if f"{label}_PRESENT" in code or f"{label}_ABSENT" in code:
+        raise ValueError("guest probe embeds its own rendered result marker")
+    _send_serial_line(child, f'python3 -c "{code}"')
+    child.expect(_guest_path_pattern(label), timeout=10)
+    state = child.match.group(1)
+    if state != "PRESENT":
+        raise RuntimeError(f"guest capability is unavailable: {label}")
+
+
 def _validate_framebuffer(screenshot):
     image = screenshot.read_bytes()
     if not image.startswith(b"P6") or len(image) < 4096:
@@ -163,6 +174,54 @@ def _enforce_boot_budget(started, budget, *, now=None):
     return elapsed
 
 
+def _qemu_boot_args(
+    iso,
+    *,
+    edition,
+    monitor_path,
+    firmware="bios",
+    media="optical",
+    uefi_code=None,
+    uefi_vars=None,
+):
+    if firmware not in {"bios", "uefi"}:
+        raise ValueError(f"unsupported firmware: {firmware}")
+    if media not in {"optical", "usb"}:
+        raise ValueError(f"unsupported boot media: {media}")
+    args = [
+        "-accel", "tcg",
+        "-machine", "q35" if firmware == "uefi" else "pc",
+        "-m", "1024" if edition == "desktop" else "512",
+    ]
+    if firmware == "uefi":
+        code = Path(uefi_code).resolve() if uefi_code else None
+        variables = Path(uefi_vars).resolve() if uefi_vars else None
+        if not code or not code.is_file():
+            raise FileNotFoundError("OVMF code firmware is unavailable")
+        if not variables or not variables.is_file():
+            raise FileNotFoundError("writable OVMF variables file is unavailable")
+        args.extend([
+            "-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={code}",
+            "-drive", f"if=pflash,format=raw,unit=1,file={variables}",
+        ])
+    if media == "optical":
+        args.extend(["-cdrom", str(iso)])
+    else:
+        args.extend([
+            "-drive", f"if=none,id=stick,format=raw,readonly=on,file={iso}",
+            "-device", "qemu-xhci,id=xhci",
+            "-device", "usb-storage,bus=xhci.0,drive=stick,bootindex=1",
+        ])
+    args.extend([
+        "-display", "none",
+        "-device", "virtio-vga" if edition == "desktop" else "VGA",
+        "-serial", "stdio",
+        "-monitor", f"unix:{monitor_path},server=on,wait=off",
+        "-no-reboot",
+    ])
+    return args
+
+
 def run_smoke(
     iso_path,
     *,
@@ -170,6 +229,10 @@ def run_smoke(
     timeout=300,
     boot_budget=180,
     screenshot_path=None,
+    firmware="bios",
+    media="optical",
+    uefi_code=None,
+    uefi_vars=None,
 ):
     try:
         import pexpect
@@ -185,20 +248,27 @@ def run_smoke(
 
     monitor_dir = tempfile.TemporaryDirectory(prefix="tether-qemu-")
     monitor_path = Path(monitor_dir.name) / "monitor.sock"
+    writable_uefi_vars = None
+    if firmware == "uefi":
+        source_vars = Path(uefi_vars).resolve() if uefi_vars else None
+        if not source_vars or not source_vars.is_file():
+            monitor_dir.cleanup()
+            raise FileNotFoundError("OVMF variables template is unavailable")
+        writable_uefi_vars = Path(monitor_dir.name) / "OVMF_VARS.fd"
+        shutil.copyfile(source_vars, writable_uefi_vars)
 
     started = time.monotonic()
     child = pexpect.spawn(
         qemu,
-        [
-            "-accel", "tcg",
-            "-m", "1024" if edition == "desktop" else "512",
-            "-cdrom", str(iso),
-            "-display", "none",
-            "-device", "virtio-vga" if edition == "desktop" else "VGA",
-            "-serial", "stdio",
-            "-monitor", f"unix:{monitor_path},server=on,wait=off",
-            "-no-reboot",
-        ],
+        _qemu_boot_args(
+            iso,
+            edition=edition,
+            monitor_path=monitor_path,
+            firmware=firmware,
+            media=media,
+            uefi_code=uefi_code,
+            uefi_vars=writable_uefi_vars,
+        ),
         encoding="utf-8",
         codec_errors="replace",
         timeout=timeout,
@@ -242,14 +312,20 @@ def run_smoke(
         if edition == "desktop":
             _send_serial_line(child, "which weston")
             child.expect("/usr/bin/weston")
-            _send_serial_line(
+            _require_guest_capability(
                 child,
-                'python3 -c "import gi; gi.require_version(\'Gtk\', \'3.0\'); '
-                'from gi.repository import Gtk; print(\'GTK_READY\')"'
+                "from gi.repository import GIRepository; "
+                "versions=GIRepository.Repository.get_default().enumerate_versions('Gtk'); "
+                "print('GTK_' + ('PRESENT' if '3.0' in versions else 'ABSENT'))",
+                label="GTK",
             )
-            child.expect("GTK_READY")
-            _send_serial_line(child, "ls /dev/dri/card0")
-            child.expect("/dev/dri/card0")
+            _require_guest_capability(
+                child,
+                "import os,stat; path='/dev/dri/card0'; "
+                "mode=os.stat(path).st_mode if os.path.exists(path) else 0; "
+                "print('DRM_' + ('PRESENT' if stat.S_ISCHR(mode) else 'ABSENT'))",
+                label="DRM",
+            )
 
             _wait_for_guest_path(
                 child,
@@ -263,14 +339,33 @@ def run_smoke(
                 label="GUI",
             )
 
+            # Create state and a live managed job in the long-lived GUI
+            # backend. The presentation process is about to be destroyed by
+            # lock; both must still exist after a new GTK client reconnects.
+            _require_guest_capability(
+                child,
+                "import sys; sys.path.insert(0,'/usr/lib/tether-os'); "
+                "from app.gui_backend import ShellRpcClient as C; "
+                "c=C('/run/user/1000/trap-hub-shell.sock'); "
+                "a=c.request('execute',{'line':'mkdir continuity'}); "
+                "b=c.request('execute',{'line':'cd continuity'}); "
+                "j=c.request('execute',{'line':'/bin/sleep 120 &'}); "
+                "ok=all(x.get('exit_code') == 0 for x in (a,b,j)); "
+                "print('BACKEND_SETUP_' + ('PRESENT' if ok else 'ABSENT'))",
+                label="BACKEND_SETUP",
+            )
+
             # Exercise the real desktop lock path: signal the trusted session
             # supervisor, prove the realized GUI disappears, unlock vlock on
             # tty1, and prove Weston/GTK return.
-            _send_serial_line(
+            _require_guest_capability(
                 child,
-                'python3 -c "import os,signal; '
-                "os.kill(int(open('/run/user/1000/trap-hub-desktop.pid').read()), "
-                'signal.SIGUSR1)"'
+                "import sys; sys.path.insert(0,'/usr/lib/tether-os'); "
+                "from app.gui_backend import ShellRpcClient as C; "
+                "r=C('/run/user/1000/trap-hub-shell.sock').request('lock'); "
+                "ok=r.get('success') and r.get('backend') == 'desktop'; "
+                "print('LOCK_REQUEST_' + ('PRESENT' if ok else 'ABSENT'))",
+                label="LOCK_REQUEST",
             )
             _wait_for_guest_path(
                 child,
@@ -282,6 +377,16 @@ def run_smoke(
                 child,
                 "/run/user/1000/trap-hub-lock.active",
                 label="DESKTOP_LOCK",
+            )
+            _require_guest_capability(
+                child,
+                "import sys; sys.path.insert(0,'/usr/lib/tether-os'); "
+                "from app.gui_backend import ShellRpcClient as C,SessionLockedError; "
+                "c=C('/run/user/1000/trap-hub-shell.sock'); ns={'ok':False,'c':c}; "
+                "exec('try:\\n c.request(\\'state\\')\\nexcept SessionLockedError:\\n ns[\\'ok\\']=True',"
+                "{'SessionLockedError':SessionLockedError,'ns':ns,'c':c}); ok=ns['ok']; "
+                "print('RPC_LOCKED_' + ('PRESENT' if ok else 'ABSENT'))",
+                label="RPC_LOCKED",
             )
             _send_monitor_text(monitor_path, INVALID_PASSWORD)
             time.sleep(2)
@@ -302,6 +407,17 @@ def run_smoke(
                 "/run/user/1000/trap-hub-lock.active",
                 label="DESKTOP_LOCK",
                 exists=False,
+            )
+            _require_guest_capability(
+                child,
+                "import sys; sys.path.insert(0,'/usr/lib/tether-os'); "
+                "from app.gui_backend import ShellRpcClient as C; "
+                "c=C('/run/user/1000/trap-hub-shell.sock'); "
+                "p=c.request('execute',{'line':'pwd'}).get('stdout',''); "
+                "j=c.request('execute',{'line':'jobs'}).get('stdout',''); "
+                "ok=p.strip().endswith('/continuity') and 'running' in j; "
+                "print('STATE_CONTINUITY_' + ('PRESENT' if ok else 'ABSENT'))",
+                label="STATE_CONTINUITY",
             )
             if screenshot_path:
                 _capture_framebuffer(monitor_path, screenshot_path)
@@ -351,6 +467,10 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--boot-budget", type=float, default=180)
     parser.add_argument("--screenshot")
+    parser.add_argument("--firmware", choices=("bios", "uefi"), default="bios")
+    parser.add_argument("--media", choices=("optical", "usb"), default="optical")
+    parser.add_argument("--uefi-code")
+    parser.add_argument("--uefi-vars")
     args = parser.parse_args(argv)
     return run_smoke(
         args.iso,
@@ -358,6 +478,10 @@ def main(argv=None):
         timeout=args.timeout,
         boot_budget=args.boot_budget,
         screenshot_path=args.screenshot,
+        firmware=args.firmware,
+        media=args.media,
+        uefi_code=args.uefi_code,
+        uefi_vars=args.uefi_vars,
     )
 
 

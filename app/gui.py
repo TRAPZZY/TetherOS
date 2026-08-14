@@ -10,6 +10,7 @@ import importlib.util
 import os
 import sys
 import time
+import uuid
 
 from app.session import log_cmd
 from app.shell_parser import ShellSyntaxError, parse_line
@@ -20,6 +21,8 @@ class GuiCommandResponse:
     stdout: str
     exit_code: int
     command_id: str = ""
+    lock_requested: bool = False
+    lock_started: bool = False
 
 
 def gui_available():
@@ -66,9 +69,23 @@ class CommandDeckController:
         except ShellSyntaxError as exc:
             return GuiCommandResponse(f"syntax error: {exc}\n", 2)
         if parsed.background:
-            return GuiCommandResponse(
-                "Use the terminal edition to start managed background jobs.\n", 2
-            )
+            if len(parsed.commands) != 1 or parsed.redirect_path:
+                return GuiCommandResponse(
+                    "Background jobs require one external command without redirection.\n",
+                    2,
+                )
+            try:
+                argv = self.shell._expand_alias(parsed.commands[0].argv)
+                if argv[0].lower() in self.shell._commands:
+                    return GuiCommandResponse(
+                        "Background execution is limited to external tools.\n", 2
+                    )
+                job = self.shell.jobs.start(argv)
+            except (OSError, RuntimeError, ValueError) as exc:
+                return GuiCommandResponse(f"job: {exc}\n", 1)
+            message = f"Job {job.job_id} started: {' '.join(job.argv)}\n"
+            log_cmd(raw, message)
+            return GuiCommandResponse(message, 0, uuid.uuid4().hex)
         if parsed.redirect_path:
             return GuiCommandResponse(
                 "GUI redirection is not enabled in the feasibility edition.\n", 2
@@ -76,11 +93,14 @@ class CommandDeckController:
         with self.shell._command_lock:
             output = self.shell._run_pipeline(parsed.commands)
             result = self.shell._last_result
+            lock_requested = self.shell._lock_pending
+            self.shell._lock_pending = False
         log_cmd(raw, output)
         return GuiCommandResponse(
             stdout=output,
             exit_code=result.exit_code if result else 0,
             command_id=result.command_id if result else "",
+            lock_requested=lock_requested,
         )
 
     def lock(self):
@@ -198,6 +218,12 @@ class GtkCommandDeck:
         self._append(f"\n> {line}\n")
         response = self.controller.execute(line)
         self._append(response.stdout or f"[exit {response.exit_code}]\n")
+        if response.lock_started:
+            self.Gtk.main_quit()
+            return
+        if response.lock_requested:
+            self._lock_session()
+            return
         self._refresh_status()
 
     def _lock_session(self, *_args):
@@ -243,6 +269,15 @@ def main(argv=None):
     if unknown:
         print("usage: tether --gui [--windowed]", file=sys.stderr)
         return 2
+    backend_socket = os.environ.get("TETHER_GUI_BACKEND_SOCKET")
+    if backend_socket:
+        from app.gui_backend import RemoteCommandDeckController, ShellRpcClient
+
+        controller = RemoteCommandDeckController(ShellRpcClient(backend_socket))
+        return GtkCommandDeck(controller, windowed="--windowed" in args).run()
+
+    # Host/developer GUI sessions keep the original in-process behavior.  Only
+    # the TetherOS Desktop image opts into the supervised persistent service.
     from app.shell import TetherShell
 
     shell = TetherShell()

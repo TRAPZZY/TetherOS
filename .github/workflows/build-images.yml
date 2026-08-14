@@ -7,8 +7,8 @@ on:
     paths:
       - "app/**"
       - "buildroot-external-tether/**"
-      - "scripts/build-distro.sh"
-      - "scripts/qemu-smoke.py"
+      - "scripts/**"
+      - "security/**"
       - ".github/workflows/build-images.yml"
 
 permissions:
@@ -17,10 +17,24 @@ permissions:
   attestations: write
 
 jobs:
+  prepare-vulnerability-data:
+    runs-on: ubuntu-24.04
+    outputs:
+      revision: ${{ steps.nvd.outputs.revision }}
+    steps:
+      - name: Resolve one NVD snapshot for the complete matrix
+        id: nvd
+        run: |
+          revision="$(git ls-remote https://github.com/fkie-cad/nvd-json-data-feeds/ HEAD | awk '{print $1}')"
+          printf '%s' "$revision" | grep -Eq '^[0-9a-f]{40}$'
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare-vulnerability-data
     env:
       BUILDROOT_DIR: /home/runner/buildroot-2025.02.16
       BUILDROOT_IMAGES: /home/runner/buildroot-2025.02.16/output/images
+      NVD_REVISION: ${{ needs.prepare-vulnerability-data.outputs.revision }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,7 +49,7 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.BUILDROOT_DIR }}/dl
-          key: buildroot-2025.02.16-${{ matrix.edition }}-${{ hashFiles('buildroot-external-tether/**', 'scripts/build-distro.sh') }}
+          key: buildroot-2025.02.16-${{ matrix.edition }}-${{ env.NVD_REVISION }}-${{ hashFiles('buildroot-external-tether/**', 'scripts/build-distro.sh') }}
           restore-keys: |
             buildroot-2025.02.16-${{ matrix.edition }}-
             buildroot-2025.02.16-
@@ -48,6 +62,19 @@ jobs:
           test "$(cat "$BUILDROOT_IMAGES/tether-os.edition")" = "${{ matrix.edition }}"
           cd "$BUILDROOT_IMAGES"
           sha256sum -c "tether-os-${{ matrix.edition }}.sha256"
+      - name: Verify BIOS, UEFI, and raw-USB media structures
+        run: |
+          bash scripts/verify-boot-media.sh \
+            "$BUILDROOT_IMAGES/tether-os.iso" \
+            "$RUNNER_TEMP/tether-os-${{ matrix.edition }}.boot-media.txt"
+      - name: Evaluate Buildroot runtime CVE inventory
+        id: buildroot_cve_scan
+        continue-on-error: true
+        run: |
+          python scripts/check-cve-report.py \
+            "$BUILDROOT_IMAGES/tether-os-${{ matrix.edition }}.cve.cdx.json" \
+            --coverage-policy security/cve-coverage-exceptions.json \
+            --nvd-evidence "$BUILDROOT_IMAGES/tether-os-${{ matrix.edition }}.nvd.json"
       - name: Scan shipped dependency inventory
         id: vulnerability_scan
         continue-on-error: true
@@ -64,15 +91,32 @@ jobs:
       - name: Boot image and exercise login/lock contracts
         run: |
           python -m pip install pexpect
-          python scripts/qemu-smoke.py \
-            "$BUILDROOT_IMAGES/tether-os.iso" \
-            --edition "${{ matrix.edition }}" \
-            --boot-budget 180 \
-            --screenshot "$RUNNER_TEMP/tether-os-${{ matrix.edition }}.ppm"
-      - name: Enforce high-severity vulnerability gate
-        if: steps.vulnerability_scan.outcome == 'failure'
+          OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+          OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
+          test -s "$OVMF_CODE"
+          test -s "$OVMF_VARS"
+          for firmware in bios uefi; do
+            for media in optical usb; do
+              firmware_args=()
+              if [ "$firmware" = uefi ]; then
+                firmware_args=(--uefi-code "$OVMF_CODE" --uefi-vars "$OVMF_VARS")
+              fi
+              python scripts/qemu-smoke.py \
+                "$BUILDROOT_IMAGES/tether-os.iso" \
+                --edition "${{ matrix.edition }}" \
+                --firmware "$firmware" \
+                --media "$media" \
+                "${firmware_args[@]}" \
+                --boot-budget 180 \
+                --screenshot "$RUNNER_TEMP/tether-os-${{ matrix.edition }}-${firmware}-${media}.ppm"
+            done
+          done
+      - name: Enforce high-severity vulnerability gates
+        if: >-
+          steps.buildroot_cve_scan.outcome == 'failure' ||
+          steps.vulnerability_scan.outcome == 'failure'
         run: |
-          echo "High or critical vulnerabilities were reported; release is blocked."
+          echo "A Buildroot or rootfs vulnerability gate failed; release is blocked."
           exit 1
       - name: Attest image build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
@@ -83,17 +127,26 @@ jobs:
         with:
           subject-path: ${{ env.BUILDROOT_IMAGES }}/tether-os.iso
           sbom-path: ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.sbom.cdx.json
+      - name: Attest complete release manifest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: tether-os-${{ matrix.edition }}
           path: |
+            ${{ env.BUILDROOT_IMAGES }}/bzImage
+            ${{ env.BUILDROOT_IMAGES }}/rootfs.cpio.gz
             ${{ env.BUILDROOT_IMAGES }}/tether-os.iso
             ${{ env.BUILDROOT_IMAGES }}/tether-os.edition
             ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.sha256
             ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.buildroot-info.json
             ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.sbom.cdx.json
+            ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.cve.cdx.json
+            ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.nvd.json
             ${{ runner.temp }}/tether-os-${{ matrix.edition }}.vulnerabilities.json
-            ${{ runner.temp }}/tether-os-${{ matrix.edition }}.ppm
+            ${{ runner.temp }}/tether-os-${{ matrix.edition }}.boot-media.txt
+            ${{ runner.temp }}/tether-os-${{ matrix.edition }}-*.ppm
           if-no-files-found: error
           retention-days: 14

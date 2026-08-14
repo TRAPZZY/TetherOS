@@ -35,6 +35,7 @@ states accurately instead of converting them into a security success.
 | Command input and output | Parser, typed command registry, job manager, terminal/GTK adapters |
 | Tor protection state | Tor control authentication plus independent egress verification |
 | Build inputs and outputs | Pinned Buildroot archive, repository revision, GitHub runner, checksums, SBOM, attestations |
+| Desktop shell state | Long-lived same-UID backend; private Unix socket; `SO_PEERCRED`; supervisor-parent lock control |
 | Temporary runtime markers | `/run/tether` or mode-0700 `/run/user/1000`; never treated as authentication proof |
 
 The GTK interface and terminal interface are unprivileged views over one shell
@@ -68,7 +69,7 @@ markers, firewall rules, and the Python application.
 | Privilege escalation from shell | Reject simulated `sudo`/`su`; exact allowlist for shutdown/reboot broker | Privilege and Buildroot contract tests |
 | Secret leakage | Credential-aware redaction and bounded/redacted CI transcript | Privacy, history, and transcript tests |
 | False anonymity claim | `verified` only after Tor control and external egress checks | Tor adapter and Command Deck tests |
-| GUI bypasses the lock | Trusted desktop supervisor stops Weston, enters `vlock`, then recreates GUI only after unlock | QEMU observes GUI-ready and lock-active lifecycle and captures a nonblank framebuffer |
+| GUI bypasses or loses state at lock | Backend closes RPC first; authenticated supervisor stops Weston, enters `vlock`, reopens RPC, then recreates GUI | Unit tests and QEMU prove RPC denial plus VFS/live-job continuity across wrong and correct unlock attempts |
 | GUI failure strands recovery | Serial console remains Core; Desktop falls back to Core when Weston exits unexpectedly | Build contract plus QEMU serial diagnostics |
 | Image tampering or dependency ambiguity | SHA-256 manifest, Buildroot package metadata, CycloneDX SBOM, signed GitHub provenance/SBOM attestations | Image workflow verifies checksums before attesting and uploading |
 | CI action tag replacement | Official actions pinned to immutable commit SHAs | Workflow review and contract tests |
@@ -85,6 +86,10 @@ markers, firewall rules, and the Python application.
 - Processes running as the same `tether` user are not mutually sandboxed.
   Future third-party tool packs require signature verification and a separate
   confinement design before they can be enabled by default.
+- A local Desktop lock protects Linux virtual consoles, not a separately
+  authenticated physical serial session. Serial ports are a distinct
+  multi-session access path and require physical access control or an explicit
+  coordinated-session policy in deployments that expose them.
 - The firewall constrains the boot image, but no anonymity system can promise
   anonymity against endpoint compromise, operator disclosure, browser
   fingerprinting, malicious documents, or global traffic correlation.

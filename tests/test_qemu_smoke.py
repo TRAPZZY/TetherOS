@@ -87,6 +87,41 @@ def test_guest_path_pattern_accepts_nested_pty_translation_and_captures_state():
     assert match.group(1) == "PRESENT"
 
 
+def test_guest_capability_probe_cannot_pass_from_an_echoed_command(monkeypatch):
+    sent = []
+
+    class Match:
+        @staticmethod
+        def group(_index):
+            return "ABSENT"
+
+    class Child:
+        match = Match()
+
+        def send(self, value):
+            sent.append(value)
+
+        def expect(self, pattern, timeout):
+            assert pattern == QEMU_SMOKE._guest_path_pattern("GTK")
+            assert timeout == 10
+
+    monkeypatch.setattr(QEMU_SMOKE.time, "sleep", lambda _delay: None)
+    code = "print('GTK_' + ('PRESENT' if False else 'ABSENT'))"
+    with pytest.raises(RuntimeError, match="GTK"):
+        QEMU_SMOKE._require_guest_capability(Child(), code, label="GTK")
+
+    rendered_command = "".join(sent)
+    assert "GTK_PRESENT" not in rendered_command
+    assert "GTK_ABSENT" not in rendered_command
+
+
+def test_guest_capability_probe_rejects_a_self_satisfying_marker():
+    with pytest.raises(ValueError, match="embeds its own"):
+        QEMU_SMOKE._require_guest_capability(
+            object(), "print('DRM_PRESENT')", label="DRM"
+        )
+
+
 def test_failed_smoke_captures_a_diagnostic_framebuffer(monkeypatch, tmp_path):
     captured = []
 
@@ -120,3 +155,39 @@ def test_failed_smoke_captures_a_diagnostic_framebuffer(monkeypatch, tmp_path):
 
     assert len(captured) == 1
     assert captured[0][1] == screenshot
+
+
+def test_qemu_boot_args_cover_bios_optical_and_raw_usb(tmp_path):
+    iso = tmp_path / "tether.iso"
+    iso.write_bytes(b"iso")
+    optical = QEMU_SMOKE._qemu_boot_args(
+        iso, edition="core", monitor_path="monitor", media="optical"
+    )
+    assert optical[optical.index("-machine") + 1] == "pc"
+    assert optical[optical.index("-cdrom") + 1] == str(iso)
+
+    usb = QEMU_SMOKE._qemu_boot_args(
+        iso, edition="core", monitor_path="monitor", media="usb"
+    )
+    assert "qemu-xhci,id=xhci" in usb
+    assert "usb-storage,bus=xhci.0,drive=stick,bootindex=1" in usb
+    assert any("format=raw,readonly=on" in item for item in usb)
+
+
+def test_qemu_boot_args_use_matching_uefi_pflash_images(tmp_path):
+    iso = tmp_path / "tether.iso"
+    code = tmp_path / "OVMF_CODE_4M.fd"
+    variables = tmp_path / "OVMF_VARS_4M.fd"
+    for path in (iso, code, variables):
+        path.write_bytes(b"fixture")
+    args = QEMU_SMOKE._qemu_boot_args(
+        iso,
+        edition="desktop",
+        monitor_path="monitor",
+        firmware="uefi",
+        uefi_code=code,
+        uefi_vars=variables,
+    )
+    assert args[args.index("-machine") + 1] == "q35"
+    assert any("unit=0,readonly=on" in item and str(code) in item for item in args)
+    assert any("unit=1" in item and str(variables) in item for item in args)

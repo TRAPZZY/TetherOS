@@ -11,7 +11,11 @@ section is completed by a tester with physical machines.
 - [ ] Core image compiles from the checksum-pinned Buildroot release.
 - [ ] Desktop image compiles from the same revision.
 - [ ] Generated image, kernel, rootfs, edition marker, package inventory, and
-      CycloneDX SBOM match their SHA-256 manifest.
+      CycloneDX SBOM/CVE/NVD evidence match their SHA-256 manifest, and the
+      manifest's GitHub provenance verifies for the exact commit.
+- [ ] Both editions pass BIOS and UEFI boot from optical and hybrid raw-USB
+      media; structural inspection confirms both El Torito entries, MBR/GPT,
+      and a valid `EFI/BOOT/BOOTX64.EFI`.
 - [ ] Core QEMU rejects an incorrect password, accepts the enrolled password,
       exposes the Command Deck, locks, rejects an incorrect re-login, unlocks,
       exits, and returns to login within the boot budget.
@@ -22,7 +26,26 @@ section is completed by a tester with physical machines.
 - [ ] CI diagnostics contain no session password.
 - [ ] Threat model and known limitations match the shipped implementation.
 - [ ] No unresolved high-severity finding affects a reachable default
-      component.
+      component, and every unscanned runtime component has a current owned
+      coverage exception and compensating control.
+
+## Physical Core production gate
+
+Run this section on at least one x86_64 system from the documented supported
+hardware matrix, using the exact checksum- and attestation-verified Core ISO:
+
+- [ ] Raw USB boot reaches password enrollment without exposing a rescue shell.
+- [ ] Incorrect login is rejected and the correct password opens a non-root
+      `tether` session.
+- [ ] The fail-closed firewall is engaged before Ethernet is attached.
+- [ ] Tor control and egress verification succeed on an approved wired network,
+      while a plain direct TCP connection from `tether` remains blocked.
+- [ ] Manual and 600-second inactivity locking reject an incorrect password,
+      accept the correct password, and retain the active shell session.
+- [ ] Verified circuit rotation, reboot, fresh password enrollment, and clean
+      shutdown complete successfully.
+- [ ] Firmware settings are restored and the host operating system remains
+      intact after the USB is removed.
 
 ## Physical Desktop promotion gate
 
@@ -44,3 +67,8 @@ input controller families) using the exact checksum-verified ISO:
 Do not mark unchecked physical items as passed from QEMU evidence. If either
 device fails, Desktop stays feasibility status while Core can continue through
 its own release decision.
+
+Execution details, destructive-media safeguards, Core hardware qualification,
+Tor and direct-egress checks, rollback, evidence fields, and explicit pass/fail
+rules are defined in the
+[physical installation and acceptance runbook](PHYSICAL_TEST_RUNBOOK.md).

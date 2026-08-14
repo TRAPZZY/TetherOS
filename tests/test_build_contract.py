@@ -162,6 +162,9 @@ def test_gui_is_an_explicit_optional_edition_with_core_as_default():
         "BR2_PACKAGE_LIBGTK3_WAYLAND", "BR2_PACKAGE_PYTHON_GOBJECT",
     ):
         assert f"enable_config {option}" in builder
+    assert "enable_config BR2_TOOLCHAIN_BUILDROOT_CXX" in builder
+    assert 'require_config "$option"' in builder
+    assert "required realized Buildroot option is unavailable" in builder
 
 
 def test_desktop_session_is_kiosk_scoped_and_falls_back_to_core():
@@ -196,7 +199,35 @@ def test_desktop_kernel_fragment_enables_drm_and_input():
     ).read_text()
     assert "CONFIG_DRM=y" in fragment
     assert "CONFIG_DRM_VIRTIO_GPU=y" in fragment
+    assert "CONFIG_DRM_I915=y" in fragment
+    assert "CONFIG_DRM_AMDGPU=y" in fragment
+    assert "CONFIG_SYSFB_SIMPLEFB=y" in fragment
+    assert "CONFIG_DRM_NOUVEAU=y" not in fragment
     assert "CONFIG_INPUT_EVDEV=y" in fragment
+    assert "CONFIG_USB_HID=y" in fragment
+
+
+def test_image_supports_hybrid_bios_uefi_and_physical_network_boot():
+    board = ROOT / "buildroot-external-tether" / "board" / "tether"
+    kernel = (board / "kernel.config").read_text()
+    post_image = (board / "post-image.sh").read_text()
+    builder = (ROOT / "scripts" / "build-distro.sh").read_text()
+
+    for option in (
+        "CONFIG_EFI=y", "CONFIG_EFI_STUB=y", "CONFIG_E1000E=y",
+        "CONFIG_IGB=y", "CONFIG_IGC=y", "CONFIG_R8169=y",
+        "CONFIG_USB_RTL8152=y", "CONFIG_USB_XHCI_HCD=y",
+    ):
+        assert option in kernel
+    assert "grub-efi-amd64-bin" in builder
+    assert "BR2_PACKAGE_LINUX_FIRMWARE_AMDGPU" in builder
+    assert "BR2_PACKAGE_LINUX_FIRMWARE_I915" in builder
+    assert "BR2_PACKAGE_LINUX_FIRMWARE_BROADCOM_TIGON3" in builder
+    assert "required realized kernel option is unavailable" in builder
+    assert "grub-mkstandalone" in post_image
+    assert "BOOTX64.EFI" in post_image
+    assert "-eltorito-alt-boot" in post_image
+    assert "-isohybrid-gpt-basdat" in post_image
 
 
 def test_ci_builds_and_boots_both_editions():
@@ -206,19 +237,45 @@ def test_ci_builds_and_boots_both_editions():
     assert "scripts/qemu-smoke.py" in workflow
     assert '--edition "${{ matrix.edition }}"' in workflow
     assert "--boot-budget 180" in workflow
-    assert '--screenshot "$RUNNER_TEMP/tether-os-${{ matrix.edition }}.ppm"' in workflow
+    assert '--firmware "$firmware"' in workflow
+    assert '--media "$media"' in workflow
+    assert "OVMF_CODE_4M.fd" in workflow
+    assert "OVMF_VARS_4M.fd" in workflow
+    assert 'tether-os-${{ matrix.edition }}-${firmware}-${media}.ppm' in workflow
     assert "utils/generate-cyclonedx" in builder
+    assert "scripts/filter-runtime-sbom.py" in builder
+    assert "--no-host-packages" not in builder
+    assert "support/scripts/cve-check" in builder
+    assert 'scripts/check-cve-report.py' in workflow
+    assert '--coverage-policy security/cve-coverage-exceptions.json' in workflow
+    assert '--nvd-evidence' in workflow
+    assert "--no-nvd-update" in builder
+    assert 'NVD_REVISION="$(git ls-remote' in builder
     assert '"tether-os-$TETHER_EDITION.sha256"' in builder
     assert 'sha256sum -c "tether-os-${{ matrix.edition }}.sha256"' in workflow
+    assert "${{ env.BUILDROOT_IMAGES }}/bzImage" in workflow
+    assert "${{ env.BUILDROOT_IMAGES }}/rootfs.cpio.gz" in workflow
     assert ".sbom.cdx.json" in workflow
     assert "scan-type: rootfs" in workflow
     assert "scan-ref: ${{ env.BUILDROOT_DIR }}/output/target" in workflow
     assert "actions/attest@" in workflow
+    assert "Attest complete release manifest" in workflow
+    assert "tether-os-${{ matrix.edition }}.sha256" in workflow
     assert "id-token: write" in workflow
     assert "attestations: write" in workflow
     assert "aquasecurity/trivy-action@" in workflow
     assert "severity: HIGH,CRITICAL" in workflow
     assert "Enforce high-severity vulnerability gate" in workflow
+
+
+def test_release_media_structure_is_verified_before_boot():
+    verifier = (ROOT / "scripts" / "verify-boot-media.sh").read_text()
+    workflow = (ROOT / ".github" / "workflows" / "build-images.yml").read_text()
+    assert "-report_el_torito plain" in verifier
+    assert "-report_system_area plain" in verifier
+    assert "EFI/BOOT/BOOTX64.EFI" in verifier
+    assert "grub-file --is-x86_64-efi" in verifier
+    assert "scripts/verify-boot-media.sh" in workflow
 
 
 def test_ci_actions_are_pinned_to_immutable_commit_shas():
