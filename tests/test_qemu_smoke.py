@@ -85,3 +85,38 @@ def test_guest_path_pattern_accepts_nested_pty_translation_and_captures_state():
     match = re.search(QEMU_SMOKE._guest_path_pattern("GUI"), rendered)
     assert match
     assert match.group(1) == "PRESENT"
+
+
+def test_failed_smoke_captures_a_diagnostic_framebuffer(monkeypatch, tmp_path):
+    captured = []
+
+    class Child:
+        logfile_read = None
+
+        def expect(self, _pattern, **_kwargs):
+            raise RuntimeError("guest failed")
+
+        def close(self, force=False):
+            assert force is True
+
+    class Pexpect:
+        @staticmethod
+        def spawn(*_args, **_kwargs):
+            return Child()
+
+    monkeypatch.setitem(__import__("sys").modules, "pexpect", Pexpect)
+    monkeypatch.setattr(QEMU_SMOKE.shutil, "which", lambda _name: "/usr/bin/qemu")
+    monkeypatch.setattr(
+        QEMU_SMOKE,
+        "_capture_framebuffer",
+        lambda monitor, screenshot: captured.append((monitor, screenshot)),
+    )
+
+    iso = tmp_path / "test.iso"
+    iso.write_bytes(b"not needed by the mocked QEMU")
+    screenshot = tmp_path / "failure.ppm"
+    with pytest.raises(RuntimeError, match="QEMU smoke failed"):
+        QEMU_SMOKE.run_smoke(iso, screenshot_path=screenshot)
+
+    assert len(captured) == 1
+    assert captured[0][1] == screenshot

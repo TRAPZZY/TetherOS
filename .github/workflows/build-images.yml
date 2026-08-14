@@ -53,8 +53,8 @@ jobs:
         continue-on-error: true
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          scan-type: sbom
-          scan-ref: ${{ env.BUILDROOT_IMAGES }}/tether-os-${{ matrix.edition }}.sbom.cdx.json
+          scan-type: rootfs
+          scan-ref: ${{ env.BUILDROOT_DIR }}/output/target
           scanners: vuln
           severity: HIGH,CRITICAL
           ignore-unfixed: false

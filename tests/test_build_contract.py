@@ -211,6 +211,8 @@ def test_ci_builds_and_boots_both_editions():
     assert '"tether-os-$TETHER_EDITION.sha256"' in builder
     assert 'sha256sum -c "tether-os-${{ matrix.edition }}.sha256"' in workflow
     assert ".sbom.cdx.json" in workflow
+    assert "scan-type: rootfs" in workflow
+    assert "scan-ref: ${{ env.BUILDROOT_DIR }}/output/target" in workflow
     assert "actions/attest@" in workflow
     assert "id-token: write" in workflow
     assert "attestations: write" in workflow

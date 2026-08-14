@@ -325,6 +325,14 @@ def run_smoke(
         child.expect("(?i)password:")
         return 0
     except Exception as exc:
+        if screenshot_path:
+            try:
+                _capture_framebuffer(monitor_path, screenshot_path)
+            except Exception as screenshot_exc:
+                print(
+                    f"Unable to capture failure framebuffer: {screenshot_exc}",
+                    file=sys.stderr,
+                )
         raise RuntimeError(
             "TetherOS QEMU smoke failed; redacted serial transcript follows:\n"
             f"{transcript.tail()}"
